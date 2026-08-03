@@ -1,4 +1,4 @@
-"""Command execution."""
+"""Command execution with process timeout controls."""
 
 from __future__ import annotations
 
@@ -7,15 +7,14 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+MAX_EXECUTION_TIME = 10  # Seconds
+
 
 @dataclass
 class ExecutionResult:
     stdout: str
     stderr: str
     exit_code: int
-
-
-DEFAULT_TIMEOUT_SECONDS = 60
 
 
 def _resolve_shell(command: str) -> list[str]:
@@ -39,14 +38,15 @@ def _resolve_shell(command: str) -> list[str]:
 
     raise RuntimeError(
         "PowerShell Core (pwsh) is not installed. Install it to run Windows-style "
-        "commands on this platform (it is preinstalled in the provided Docker image)."
+        "commands on this platform."
     )
 
 
 def run_command(
     command: str,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    timeout: int = MAX_EXECUTION_TIME,
 ) -> ExecutionResult:
+    """Run command with a strict execution timeout."""
 
     argv = _resolve_shell(command)
 
@@ -67,7 +67,7 @@ def run_command(
     except subprocess.TimeoutExpired:
         return ExecutionResult(
             stdout="",
-            stderr=f"Command timed out after {timeout} seconds.",
+            stderr=f"Command execution timed out after {timeout} seconds.",
             exit_code=124,
         )
 

@@ -1,6 +1,6 @@
 # WinCliAgent
 
-A local AI-powered Windows CLI agent that converts natural-language requests into PowerShell commands, validates them, checks for destructive behavior, executes them with user approval, and evaluates output quality.
+A local AI-powered Windows CLI agent that converts natural-language requests into PowerShell commands, normalizes syntax, evaluates 4-tier risk levels, enforces process execution timeouts, requires human confirmation, records audit logs, and validates result quality.
 
 Built with **LangGraph + Ollama + Qwen 2.5:3B**.
 
@@ -8,7 +8,7 @@ Built with **LangGraph + Ollama + Qwen 2.5:3B**.
 
 ## 🚀 Key Demos
 
-### 1. Normal Execution Flow (Information Request)
+### 1. 4-Tier Risk Assessment & Information Request (Low Risk)
 
 ```text
 User: show my IP configuration
@@ -16,6 +16,8 @@ User: show my IP configuration
 Agent:
   command : Get-NetIPConfiguration
   details : Displays network adapter IP configurations.
+  Risk    : LOW
+  Action  : ALLOWED
 
 Run this command? [y/N] y
 
@@ -23,15 +25,13 @@ Run this command? [y/N] y
 
 --- output ---
 InterfaceAlias       : Wi-Fi
-InterfaceIndex       : 16
-InterfaceDescription : MediaTek Wi-Fi 6E MT7922 (RZ616) 160MHz PCIe Adapter
 IPv4Address          : 10.22.2.207
 IPv4DefaultGateway   : 10.22.0.1
 
   Result validation: PASS
 ```
 
-### 2. Safety Interception (Destructive Command Blocked)
+### 2. Safety Interception (Critical/High Risk Blocked)
 
 ```text
 User: delete all files in the current directory
@@ -39,19 +39,22 @@ User: delete all files in the current directory
 Agent:
   command : Remove-Item -Path * -Recurse
   details : Deletes all files and subdirectories recursively.
+  Risk    : CRITICAL
+  Action  : BLOCKED
 
-  [BLOCKED] Potentially destructive command detected: remove-item
+  [BLOCKED] Critical risk system/destructive operation: Remove-Item -Path * -Recurse
 ```
 *(The command is intercepted by the safety screening layer and never executed).*
 
-### 3. Agentic Self-Correction (Error Recovery & Retry)
+### 3. Agentic Self-Correction & Audit Log
 
 ```text
 User: show disk usage
 
 Agent Attempt 1:
   command : Get-PSDrive -PSProvider FileSystem | Measure-Object -Property Used -Sum
-  details : Calculates total disk usage.
+  Risk    : LOW
+  Action  : ALLOWED
 
 Run this command? [y/N] y
 
@@ -68,7 +71,8 @@ Retrying (attempt 2/2)...
 
 Agent Attempt 2:
   command : Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
-  details : Displays used and free space for filesystem drives.
+  Risk    : LOW
+  Action  : ALLOWED
 
 Run this command? [y/N] y
 
@@ -82,24 +86,23 @@ D      1659539456 286697807872
 
   Result validation: PASS
 ```
-*(The agent detects that Attempt 1 produced incomplete summary data, passes the failure context back to local Qwen, generates a better command, requires human re-approval, and achieves PASS).*
 
 ---
 
-## ✨ Features
+## ✨ Advanced Features
 
-- **Natural Language ➔ PowerShell**: Converts free-form requests into valid PowerShell cmdlets.
-- **100% Local LLM Inference**: Runs locally via Ollama (`qwen2.5:3b`) without requiring paid APIs or `OPENAI_API_KEY`.
-- **LangGraph Agentic Architecture**: State graph pipeline managing command generation, validation, safety screening, human confirmation, execution, and semantic result evaluation.
-- **Rule-Based Command Validator**: Validates cmdlet syntax and catches common object property hallucinations before execution.
-- **Layered Safety Screening**: Intercepts destructive cmdlets (`Remove-Item`, `Stop-Process`, `format`, `shutdown`, etc.) and dangerous parameters (`-Force`, `-Recurse`, `/s`, `/q`).
-- **Human-in-the-Loop Confirmation**: Pauses before execution to allow the user to review and approve/reject proposed commands.
-- **Semantic Result Validator**: Verifies that execution stdout actually answers the user's intent rather than relying solely on `exit_code == 0`. Handles GUI commands (like `winver`) gracefully.
-- **Error-Aware Auto-Recovery**: Feeds execution errors and validation failure reasons back to Qwen to attempt self-correction.
+- **4-Tier Risk Engine**: Classifies commands into `LOW` (read-only), `MEDIUM` (modifications), `HIGH` (dangerous cmdlets/parameters), and `CRITICAL` (destructive system operations).
+- **Process Execution Timeout (`10s`)**: Enforces a strict 10-second timeout on PowerShell process execution to prevent hanging pipelines.
+- **Structured Audit Logging (`logs/agent.log`)**: Records ISO timestamped JSON log entries capturing user prompts, generated commands, risk levels, human approval, exit code, validation status, and retry counts.
+- **Command Alias Normalization**: Automatically converts PowerShell aliases (`gci`, `dir`, `ls`, `gps`, `ps`, `rm`, `del`, `cd`, `pwd`, etc.) to canonical cmdlet names before evaluation.
+- **Dry-Run Mode (`--dry-run`)**: Translates and screens requests with risk assessment without executing commands.
+- **Explain Mode (`--explain`)**: Displays generated command, explanation, and risk assessment without executing.
+- **Verbose Workflow Logging (`--verbose`)**: Prints detailed step-by-step pipeline execution logs (`[GENERATE]`, `[VALIDATE]`, `[SAFETY]`, `[EXECUTE]`, `[RESULT]`).
+- **Interactive History Commands**: Supports `> history` (view past runs) and `> history <N>` (inspect detailed execution record for item N).
+- **100% Local Inference**: Runs locally via Ollama (`qwen2.5:3b`) without requiring paid APIs or `OPENAI_API_KEY`.
 - **Duplicate Command Prevention**: Tracks `previous_commands` across retries to prevent repeating failed attempts.
 - **Strict Retry Boundary (`MAX_RETRIES = 2`)**: Enforces a maximum retry limit of 2 to avoid infinite loops.
-- **Structured Output**: LLM returns schema-validated JSON with fallback text parsing.
-- **Comprehensive Unit & Integration Test Suite**: 34 automated tests covering all modules and graph state transitions.
+- **Automated Test Suite**: 40 automated unit and integration tests covering risk classification, normalizers, audit logs, timeouts, and graph state transitions.
 
 ---
 
@@ -116,11 +119,12 @@ D      1659539456 286697807872
                   └────────┬─────────┘
                            ↓
                   ┌──────────────────┐
-                  │ Command Validator│
+                  │ Alias Normalizer │
                   └────────┬─────────┘
                            ↓
                   ┌──────────────────┐
-                  │  Safety Checker  │
+                  │ 4-Tier Risk &    │
+                  │ Safety Checker   │
                   └────────┬─────────┘
                            ↓
                   ┌──────────────────┐
@@ -128,12 +132,17 @@ D      1659539456 286697807872
                   └────────┬─────────┘
                            ↓
                   ┌──────────────────┐
-                  │    PowerShell    │
-                  │     Executor     │
+                  │ PowerShell Exec  │
+                  │ (10s Timeout)    │
                   └────────┬─────────┘
                            ↓
                   ┌──────────────────┐
                   │ Result Validator │
+                  └────────┬─────────┘
+                           ↓
+                  ┌──────────────────┐
+                  │ Audit Logger     │
+                  │ (logs/agent.log) │
                   └────────┬─────────┘
                            ↓
                     ┌──────┴──────┐
@@ -149,18 +158,6 @@ D      1659539456 286697807872
 
 ---
 
-## 🛠️ How It Works
-
-1. **Command Generation**: Local Qwen model translates natural language requests into structured JSON containing the PowerShell command, explanation, and risk level.
-2. **Command Validation**: Checks cmdlet correctness and filters out hallucinated parameters/properties.
-3. **Safety Validation**: Blocks dangerous commands (`Remove-Item`, `Stop-Process`, `Stop-Service`, `Restart-Computer`, `shutdown`, `format`, `clear-content`, `del`, `erase`, `rmdir`) and dangerous parameters (`-Force`, `-Recurse`, `/s`, `/q`, `-Confirm:$false`).
-4. **Human Confirmation**: Prompts `Run this command? [y/N]` before execution. Automated `--auto` mode is available for trusted testing.
-5. **PowerShell Execution**: Executes the command using native PowerShell (`pwsh` / `powershell`) and captures stdout, stderr, and return exit codes.
-6. **Semantic Result Validation**: Evaluates the output for quality and relevance (e.g. verifying disk usage outputs display drive names, used space, and free space). Recognizes legitimate GUI app launches (`winver`).
-7. **Error Recovery & Retry**: When validation or execution fails, feeds the original request, failed command, exit code, stdout, stderr, and failure reason back to Qwen to generate a different command. Enforces `MAX_RETRIES = 2`.
-
----
-
 ## 📁 Project Structure
 
 ```text
@@ -168,22 +165,28 @@ WinCliAgent/
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── executor.py         # PowerShell process execution & output capture
+│   ├── executor.py         # PowerShell process execution & 10s timeout control
 │   ├── graph.py            # LangGraph workflow wiring & checkpointing
 │   ├── llm.py              # ChatOllama interface & structured JSON parser
+│   ├── logger.py           # Structured JSON audit log recorder (logs/agent.log)
 │   ├── nodes.py            # LangGraph state nodes & routing logic
+│   ├── normalizer.py       # Alias normalization & AST-like command parsing
 │   ├── result_validator.py # Semantic output quality & relevance validator
-│   ├── safety.py           # Destructive cmdlet & parameter safety screen
+│   ├── safety.py           # 4-tier risk classification & safety screening
 │   ├── state.py            # TypedDict AgentState definition
 │   └── validator.py        # Rule-based command pre-validation
+│
+├── logs/
+│   └── agent.log           # JSON Lines audit log file
 │
 ├── tests/
 │   ├── __init__.py
 │   ├── test_agent.py            # Integration tests for agent graph flow
-│   ├── test_executor.py         # PowerShell execution unit tests
+│   ├── test_executor.py         # PowerShell execution & timeout unit tests
+│   ├── test_features.py         # Risk tiers, normalizer & audit log unit tests
 │   ├── test_llm.py              # LLM response parser unit tests
 │   ├── test_result_validator.py # Semantic result validation unit tests
-│   ├── test_safety.py           # Safety screening unit tests
+│   ├── test_safety.py           # 4-tier safety screening unit tests
 │   └── test_validator.py        # Pre-execution command validator unit tests
 │
 ├── .env.example
@@ -233,36 +236,47 @@ WinCliAgent/
    ```powershell
    Copy-Item .env.example .env
    ```
-   *(Ensure `OLLAMA_MODEL=qwen2.5:3b` is set in `.env`)*
 
 ---
 
 ## 💻 Running the Agent
 
-### Single Command Mode
-```powershell
-python main.py "show my IP configuration"
-```
+### Command Modes & CLI Flags
+
+- **Standard Execution**:
+  ```powershell
+  python main.py "show my IP configuration"
+  ```
+- **Dry-Run Mode** (Translate and screen without executing):
+  ```powershell
+  python main.py --dry-run "show my IP configuration"
+  ```
+- **Explain Mode** (Display command, explanation, and risk without executing):
+  ```powershell
+  python main.py --explain "show my IP configuration"
+  ```
+- **Verbose Mode** (Detailed step-by-step workflow logs):
+  ```powershell
+  python main.py --verbose "show my IP configuration"
+  ```
+- **Automated Mode** (Bypass confirmation prompt for read-only testing):
+  ```powershell
+  python main.py --auto "show my IP configuration"
+  ```
 
 ### Interactive REPL Mode
 ```powershell
 python main.py
 ```
 ```text
-WinCliAgent — type a request, or 'exit' to quit.
+WinCliAgent — type a request, 'history' to view past runs, or 'exit' to quit.
 
 > show my IP configuration
 > show disk usage
-> list Python files
-> show running processes
+> history
+> history 1
 > exit
 ```
-
-### Automated Mode (Bypass Confirmation Prompt)
-```powershell
-python main.py --auto "show my IP configuration"
-```
-*Note: Use `--auto` only for trusted, read-only testing.*
 
 ---
 
@@ -275,36 +289,43 @@ python -m unittest discover tests
 
 **Verification Output**:
 ```text
-..................................
+........................................
 ----------------------------------------------------------------------
-Ran 34 tests in 7.518s
+Ran 40 tests in 9.258s
 
 OK
 ```
 
 ---
 
-## 🛡️ Safety Model
+## 🛡️ Risk & Safety Model
 
-WinCliAgent enforces multi-layer defensive screening:
-
-```text
-Generated Command ➔ Pre-Validation ➔ Risk Classification ➔ Destructive Interception ➔ Human Confirmation ➔ PowerShell Execution ➔ Result Validation
-```
-
-- **Read-Only Commands**: Proceed after human confirmation.
-- **Destructive Commands**: Automatically blocked before execution.
-- **Retries**: Every retry command passes through safety screening and requires human re-approval.
-
-*Disclaimer: WinCliAgent is designed for local development and learning purposes.*
+| Risk Level | Target Commands & Operations | Default Action |
+| :--- | :--- | :--- |
+| **LOW** | Read-only cmdlets (`Get-ChildItem`, `Get-Process`, `Get-NetIPConfiguration`, `pwd`, `ipconfig`) | `ALLOWED` (Requires Human Confirmation) |
+| **MEDIUM** | Operational modifications (`Start-Process`, `Set-Location`, `New-Item`, `Copy-Item`) | `ALLOWED` (Requires Human Confirmation) |
+| **HIGH** | Potentially destructive cmdlets (`Remove-Item`, `Stop-Process`, `Stop-Service`, `Restart-Computer`) | `BLOCKED` (Intercepted by Safety Layer) |
+| **CRITICAL** | Destructive system operations (`Format-Volume`, `Clear-Disk`, `Diskpart`, `Remove-Item * -Recurse`) | `BLOCKED` (Intercepted by Safety Layer) |
 
 ---
 
-## 📊 Current Limitations
+## 📜 Audit Logging
 
-- **GUI Window Interactivity**: Commands launching external GUI applications (such as `winver`) exit with code `0`. The agent accurately verifies GUI execution but cannot inspect visual content rendered inside external Windows frames.
-- **Heuristic Relevance Matching**: Administrative tasks have strong concept rules. Unseen domain requests rely on deterministic keyword relevance matching.
-- **Local Model Scope**: `qwen2.5:3b` is lightweight for local execution; complex multi-stage PowerShell pipelines may occasionally trigger a retry attempt.
+Every execution or dry-run event is appended as a JSON record to `logs/agent.log`:
+
+```json
+{
+  "timestamp": "2026-08-03T08:02:24.978095+00:00",
+  "user_prompt": "show my IP configuration",
+  "generated_command": "Get-NetIPConfiguration",
+  "risk": "LOW",
+  "action": "ALLOWED",
+  "approved": true,
+  "exit_code": 0,
+  "validation": "PASS",
+  "retry_count": 0
+}
+```
 
 ---
 

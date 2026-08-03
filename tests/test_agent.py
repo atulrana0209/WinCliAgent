@@ -25,7 +25,7 @@ class TestAgentGraph(unittest.TestCase):
         state: AgentState = self.graph.get_state(config).values
 
         self.assertFalse(state.get("is_safe", True))
-        self.assertIn("potentially destructive", state.get("safety_reason", "").lower())
+        self.assertIn("destructive", state.get("safety_reason", "").lower())
 
 
 if __name__ == "__main__":

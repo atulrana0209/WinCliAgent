@@ -15,10 +15,16 @@ class AgentState(TypedDict, total=False):
     validation_reason: str
     is_safe: bool
     safety_reason: str
+    risk_level: str  # LOW, MEDIUM, HIGH, CRITICAL
+    action: str      # ALLOWED, BLOCKED
     stdout: str
     stderr: str
     exit_code: Optional[int]
     executed: bool
+    approved: bool
+    dry_run: bool
+    explain_mode: bool
+    verbose: bool
     semantic_valid: bool
     semantic_reason: str
     retry_count: int

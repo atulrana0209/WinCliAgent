@@ -6,8 +6,10 @@ from langgraph.graph import END
 
 from .executor import run_command
 from .llm import generate_command
+from .logger import log_audit_event
+from .normalizer import normalize_command
 from .result_validator import validate_result
-from .safety import screen_command
+from .safety import screen_command_risk
 from .state import AgentState
 from .validator import validate_command
 
@@ -15,27 +17,32 @@ MAX_RETRIES = 2
 
 
 def generate_node(state: AgentState) -> AgentState:
-    """Turn the user prompt into a Windows CLI command, preventing duplicate failed commands."""
+    """Turn user prompt into a normalized Windows CLI command, avoiding duplicates."""
 
     prompt = state.get("prompt", "")
     error_feedback = state.get("error_feedback")
     previous_commands = list(state.get("previous_commands", []))
 
     command, explanation, _risk = generate_command(prompt, error_feedback=error_feedback)
+    normalized = normalize_command(command)
 
-    # Phase 4: Prevent repeated failed commands
-    if command.strip().lower() in [c.strip().lower() for c in previous_commands]:
+    # Prevent repeating failed commands
+    if normalized.strip().lower() in [c.strip().lower() for c in previous_commands]:
         retry_feedback = (
             f"{error_feedback or ''}\n\n"
-            f"The command '{command}' was ALREADY tried and failed. "
-            "You MUST generate a completely DIFFERENT PowerShell command."
+            f"The command '{normalized}' was ALREADY attempted and failed. "
+            "Generate a completely DIFFERENT PowerShell command."
         )
         command, explanation, _risk = generate_command(prompt, error_feedback=retry_feedback)
+        normalized = normalize_command(command)
 
-    previous_commands.append(command)
+    previous_commands.append(normalized)
+
+    if state.get("verbose"):
+        print(f"\n[GENERATE]\nModel : Ollama (qwen2.5:3b)\nCommand: {normalized}")
 
     return {
-        "command": command,
+        "command": normalized,
         "explanation": explanation,
         "executed": False,
         "semantic_valid": False,
@@ -51,6 +58,9 @@ def validate_node(state: AgentState) -> AgentState:
 
     is_valid, reason = validate_command(command, prompt)
 
+    if state.get("verbose"):
+        print(f"\n[VALIDATE]\nSyntax & Concept Check: {'PASS' if is_valid else 'FAIL'}\nReason: {reason}")
+
     updates: AgentState = {
         "is_valid": is_valid,
         "validation_reason": reason,
@@ -60,28 +70,62 @@ def validate_node(state: AgentState) -> AgentState:
         updates["error_feedback"] = (
             f"Original request:\n{prompt}\n\n"
             f"Previous command:\n{command}\n\n"
-            f"Validation failure:\n{reason}"
+            f"Validation problem:\n{reason}"
         )
 
     return updates
 
 
 def safety_node(state: AgentState) -> AgentState:
-    """Screen the generated command."""
+    """Screen the generated command using 4-tier risk classification."""
 
     command = state.get("command", "")
-    is_safe, reason, _risk = screen_command(command)
+    is_safe, reason, risk_level, action = screen_command_risk(command)
+
+    if state.get("verbose"):
+        print(f"\n[SAFETY]\nRisk   : {risk_level}\nAction : {action}\nReason : {reason}")
 
     return {
         "is_safe": is_safe,
         "safety_reason": reason,
+        "risk_level": risk_level,
+        "action": action,
     }
 
 
 def execute_node(state: AgentState) -> AgentState:
-    """Execute the command and capture its output."""
+    """Execute command or skip if dry-run / explain mode."""
+
+    # Dry-Run / Explain mode check
+    if state.get("dry_run") or state.get("explain_mode"):
+        log_audit_event(
+            user_prompt=state.get("prompt", ""),
+            generated_command=state.get("command", ""),
+            risk=state.get("risk_level", "LOW"),
+            action=state.get("action", "ALLOWED"),
+            approved=False,
+            exit_code=0,
+            validation="DRY_RUN",
+            retry_count=state.get("retry_count", 0),
+        )
+        return {
+            "executed": False,
+            "stdout": "DRY RUN / EXPLAIN — command was NOT executed",
+            "stderr": "",
+            "exit_code": 0,
+        }
 
     if not state.get("is_safe", False) or not state.get("is_valid", False):
+        log_audit_event(
+            user_prompt=state.get("prompt", ""),
+            generated_command=state.get("command", ""),
+            risk=state.get("risk_level", "HIGH"),
+            action=state.get("action", "BLOCKED"),
+            approved=False,
+            exit_code=None,
+            validation="BLOCKED",
+            retry_count=state.get("retry_count", 0),
+        )
         return {
             "executed": False,
             "stdout": "",
@@ -89,7 +133,13 @@ def execute_node(state: AgentState) -> AgentState:
             "exit_code": None,
         }
 
+    if state.get("verbose"):
+        print(f"\n[EXECUTE]\nRunning command through PowerShell...")
+
     result = run_command(state["command"])
+
+    if state.get("verbose"):
+        print(f"Exit Code: {result.exit_code}")
 
     return {
         "executed": True,
@@ -100,7 +150,13 @@ def execute_node(state: AgentState) -> AgentState:
 
 
 def result_validation_node(state: AgentState) -> AgentState:
-    """Validate whether the execution result actually answers the user prompt."""
+    """Validate output quality and record audit event."""
+
+    if state.get("dry_run") or state.get("explain_mode"):
+        return {
+            "semantic_valid": True,
+            "semantic_reason": "Dry run mode completed.",
+        }
 
     if not state.get("executed", False):
         return {
@@ -117,6 +173,21 @@ def result_validation_node(state: AgentState) -> AgentState:
     val_res = validate_result(prompt, command, stdout, stderr, exit_code)
     is_valid = bool(val_res["valid"])
     reason = str(val_res["reason"])
+
+    if state.get("verbose"):
+        print(f"\n[RESULT]\nSemantic Validation: {'PASS' if is_valid else 'FAIL'}\nQuality: {val_res.get('quality')}\nReason: {reason}")
+
+    # Audit log entry
+    log_audit_event(
+        user_prompt=prompt,
+        generated_command=command,
+        risk=state.get("risk_level", "LOW"),
+        action=state.get("action", "ALLOWED"),
+        approved=state.get("approved", True),
+        exit_code=exit_code,
+        validation="PASS" if is_valid else "FAILED",
+        retry_count=state.get("retry_count", 0),
+    )
 
     updates: AgentState = {
         "semantic_valid": is_valid,
