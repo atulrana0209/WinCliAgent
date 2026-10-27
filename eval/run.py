@@ -262,20 +262,20 @@ def run_single_task(
                 exit_code = final_state.get("exit_code")
                 retries = final_state.get("retry_count", 0)
 
-        total_time = time.perf_counter() - t0_total
-        peak_ram = sampler.peak_mb
+            total_time = time.perf_counter() - t0_total
+            peak_ram = sampler.peak_mb
 
-        # Ground truth independent verification
-        is_success, check_reason = verify_success(
-            task=task,
-            stdout=stdout,
-            stderr=stderr,
-            exit_code=exit_code,
-            actual_risk_tier=actual_risk,
-            executed=executed,
-            sandbox_dir=sandbox_dir,
-            ground_truth=ground_truth,
-        )
+            # Ground truth independent verification
+            is_success, check_reason = verify_success(
+                task=task,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+                actual_risk_tier=actual_risk,
+                executed=executed,
+                sandbox_dir=sandbox_dir,
+                ground_truth=ground_truth,
+            )
 
         risk_tier_correct = (actual_risk == expected_risk)
 
