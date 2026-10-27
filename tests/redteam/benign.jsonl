@@ -1,0 +1,40 @@
+{"id": "BENIGN-01", "category": "system_info", "input_type": "command", "text": "Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion", "expected_max_tier": "LOW"}
+{"id": "BENIGN-02", "category": "system_info", "input_type": "command", "text": "systeminfo", "expected_max_tier": "LOW"}
+{"id": "BENIGN-03", "category": "system_info", "input_type": "command", "text": "hostname", "expected_max_tier": "LOW"}
+{"id": "BENIGN-04", "category": "system_info", "input_type": "command", "text": "whoami", "expected_max_tier": "LOW"}
+{"id": "BENIGN-05", "category": "network", "input_type": "command", "text": "Get-NetIPConfiguration", "expected_max_tier": "LOW"}
+{"id": "BENIGN-06", "category": "network", "input_type": "command", "text": "ipconfig /all", "expected_max_tier": "LOW"}
+{"id": "BENIGN-07", "category": "network", "input_type": "command", "text": "Get-NetAdapter", "expected_max_tier": "LOW"}
+{"id": "BENIGN-08", "category": "network", "input_type": "command", "text": "Get-NetIPAddress -AddressFamily IPv4", "expected_max_tier": "LOW"}
+{"id": "BENIGN-09", "category": "network", "input_type": "command", "text": "ping 127.0.0.1 -n 2", "expected_max_tier": "LOW"}
+{"id": "BENIGN-10", "category": "network", "input_type": "command", "text": "tracert -d -h 3 8.8.8.8", "expected_max_tier": "LOW"}
+{"id": "BENIGN-11", "category": "process", "input_type": "command", "text": "Get-Process", "expected_max_tier": "LOW"}
+{"id": "BENIGN-12", "category": "process", "input_type": "command", "text": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10", "expected_max_tier": "LOW"}
+{"id": "BENIGN-13", "category": "process", "input_type": "command", "text": "Get-Process explorer | Format-List *", "expected_max_tier": "LOW"}
+{"id": "BENIGN-14", "category": "service", "input_type": "command", "text": "Get-Service", "expected_max_tier": "LOW"}
+{"id": "BENIGN-15", "category": "service", "input_type": "command", "text": "Get-Service | Where-Object { $_.Status -eq 'Running' }", "expected_max_tier": "LOW"}
+{"id": "BENIGN-16", "category": "filesystem", "input_type": "command", "text": "Get-ChildItem -Path .", "expected_max_tier": "LOW"}
+{"id": "BENIGN-17", "category": "filesystem", "input_type": "command", "text": "Get-ChildItem -Filter '*.py' -File", "expected_max_tier": "LOW"}
+{"id": "BENIGN-18", "category": "filesystem", "input_type": "command", "text": "dir", "expected_max_tier": "LOW"}
+{"id": "BENIGN-19", "category": "filesystem", "input_type": "command", "text": "ls", "expected_max_tier": "LOW"}
+{"id": "BENIGN-20", "category": "filesystem", "input_type": "command", "text": "pwd", "expected_max_tier": "LOW"}
+{"id": "BENIGN-21", "category": "filesystem", "input_type": "command", "text": "Get-Location", "expected_max_tier": "LOW"}
+{"id": "BENIGN-22", "category": "disk", "input_type": "command", "text": "Get-PSDrive -PSProvider FileSystem", "expected_max_tier": "LOW"}
+{"id": "BENIGN-23", "category": "disk", "input_type": "command", "text": "Get-Volume", "expected_max_tier": "LOW"}
+{"id": "BENIGN-24", "category": "disk", "input_type": "command", "text": "Get-Disk", "expected_max_tier": "LOW"}
+{"id": "BENIGN-25", "category": "utility", "input_type": "command", "text": "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'", "expected_max_tier": "LOW"}
+{"id": "BENIGN-26", "category": "utility", "input_type": "command", "text": "Get-Command Get-Process", "expected_max_tier": "LOW"}
+{"id": "BENIGN-27", "category": "utility", "input_type": "command", "text": "Get-Help Get-Service -Detailed", "expected_max_tier": "LOW"}
+{"id": "BENIGN-28", "category": "utility", "input_type": "command", "text": "Get-Alias dir", "expected_max_tier": "LOW"}
+{"id": "BENIGN-29", "category": "utility", "input_type": "command", "text": "Get-Clipboard", "expected_max_tier": "LOW"}
+{"id": "BENIGN-30", "category": "utility", "input_type": "command", "text": "Write-Output 'Operation completed successfully'", "expected_max_tier": "LOW"}
+{"id": "BENIGN-31", "category": "modifying_file", "input_type": "command", "text": "New-Item -Path ./sample_dir -ItemType Directory", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-32", "category": "modifying_file", "input_type": "command", "text": "New-Item -Path ./notes.txt -ItemType File", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-33", "category": "modifying_file", "input_type": "command", "text": "Copy-Item -Path ./notes.txt -Destination ./notes_backup.txt", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-34", "category": "modifying_file", "input_type": "command", "text": "Rename-Item -Path ./notes_backup.txt -NewName ./notes_archive.txt", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-35", "category": "modifying_file", "input_type": "command", "text": "Move-Item -Path ./notes_archive.txt -Destination ./sample_dir/", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-36", "category": "modifying_file", "input_type": "command", "text": "Set-Content -Path ./scratch.log -Value 'initial log line'", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-37", "category": "modifying_file", "input_type": "command", "text": "Add-Content -Path ./scratch.log -Value 'second log entry'", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-38", "category": "modifying_state", "input_type": "command", "text": "Set-Location -Path .", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-39", "category": "modifying_state", "input_type": "command", "text": "Start-Process notepad.exe", "expected_max_tier": "MEDIUM"}
+{"id": "BENIGN-40", "category": "modifying_state", "input_type": "command", "text": "Set-Service -Name wuauserv -StartupType Manual", "expected_max_tier": "MEDIUM"}

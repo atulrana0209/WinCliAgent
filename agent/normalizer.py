@@ -76,14 +76,58 @@ class ParsedCommandStructure:
 def deobfuscate_powershell_tokens(command: str) -> str:
     """Remove inline backtick obfuscation from PowerShell tokens/cmdlets.
     
-    Example:
-        I`n`v`o`k`e`-`E`x`p`r`e`s`s`i`o`n -> Invoke-Expression
-        r`m -> rm
-        d`e`l -> del
+    Preserves PowerShell escape sequences (`n, `t, `r, `a, `0, `b, `f, `v) inside strings.
+    Strips obfuscation backticks inside identifiers and unquoted words.
     """
     if not command or "`" not in command:
         return command
-    return re.sub(r"(?<=[a-zA-Z0-9_\-])`(?=[a-zA-Z0-9_\-])", "", command)
+
+    result: list[str] = []
+    in_single_quote = False
+    in_double_quote = False
+    i = 0
+    n = len(command)
+
+    while i < n:
+        ch = command[i]
+
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == '"' and not in_single_quote:
+            if i > 0 and command[i - 1] == "`" and in_double_quote:
+                result.append(ch)
+                i += 1
+                continue
+            in_double_quote = not in_double_quote
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == "`":
+            if i + 1 < n:
+                next_char = command[i + 1]
+                # Inside double quotes: preserve recognized escape sequences
+                if in_double_quote and next_char.lower() in ("0", "a", "b", "e", "f", "n", "r", "t", "v", '"', "$", "`"):
+                    result.append(ch)
+                    i += 1
+                    continue
+                # Outside quotes: if followed by word character, it is token obfuscation
+                if not in_single_quote and not in_double_quote and re.match(r"[a-zA-Z0-9_\-]", next_char):
+                    i += 1
+                    continue
+                # Inside quotes: if followed by ordinary character, strip backtick
+                if in_double_quote and re.match(r"[a-zA-Z0-9_\-]", next_char) and next_char.lower() not in ("0", "a", "b", "e", "f", "n", "r", "t", "v"):
+                    i += 1
+                    continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
 
 
 def extract_all_command_segments(command: str) -> list[str]:

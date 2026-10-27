@@ -321,15 +321,21 @@ def combine_risk_tiers(rule_tier: str, llm_risk: Optional[str] = None) -> str:
 
 
 def classify_risk_tier(command: str, llm_risk: Optional[str] = None) -> tuple[str, str]:
-    """Classify command into risk tier ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL') and action ('ALLOWED', 'BLOCKED').
+    """Classify command into risk tier ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL') and action.
     
-    Evaluates all segments and ensures LLM cannot downgrade rule tier.
+    Action semantics:
+    - CRITICAL: BLOCKED (hard block, no override)
+    - HIGH: REQUIRES_CONFIRMATION (explicit typed confirmation required)
+    - MEDIUM: ALLOWED (standard confirmation)
+    - LOW: ALLOWED (auto-run allowed if allowlisted)
     """
     rule_tier, _reason, _allowlisted = classify_rule_tier_all_segments(command)
     final_tier = combine_risk_tiers(rule_tier, llm_risk)
 
-    if final_tier in ("CRITICAL", "HIGH"):
+    if final_tier == "CRITICAL":
         return final_tier, "BLOCKED"
+    if final_tier == "HIGH":
+        return final_tier, "REQUIRES_CONFIRMATION"
 
     return final_tier, "ALLOWED"
 
@@ -369,16 +375,13 @@ def screen_command_risk(
     rule_tier, reason, _allowlisted = classify_rule_tier_all_segments(command)
     final_tier = combine_risk_tiers(rule_tier, llm_risk)
 
-    action = "BLOCKED" if final_tier in ("CRITICAL", "HIGH") else "ALLOWED"
-    is_safe = (action == "ALLOWED")
-
     if final_tier == "CRITICAL":
-        return False, f"Critical risk system/destructive operation: {reason}", final_tier, action
+        return False, f"Critical risk system/destructive operation: {reason}", final_tier, "BLOCKED"
 
     if final_tier == "HIGH":
-        return False, f"High risk potentially destructive command: {reason}", final_tier, action
+        return False, f"High risk potentially destructive command: {reason}", final_tier, "REQUIRES_CONFIRMATION"
 
     if final_tier == "MEDIUM":
-        return True, f"Medium risk modification operation: {reason}", final_tier, action
+        return True, f"Medium risk modification operation: {reason}", final_tier, "ALLOWED"
 
-    return True, f"Low risk read-only command: {reason}", final_tier, action
+    return True, f"Low risk read-only command: {reason}", final_tier, "ALLOWED"

@@ -1,6 +1,7 @@
 """Unit tests for safety screening, deterministic rules, tokenization, and risk tiers."""
 
 import unittest
+from agent.normalizer import deobfuscate_powershell_tokens
 from agent.safety import (
     classify_risk,
     classify_risk_tier,
@@ -61,7 +62,7 @@ class TestSafety(unittest.TestCase):
         cmd = "Get-ChildItem; Remove-Item -Force"
         tier, action = classify_risk_tier(cmd)
         self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} not to be LOW")
-        self.assertEqual(action, "BLOCKED")
+        self.assertEqual(action, "REQUIRES_CONFIRMATION" if tier == "HIGH" else "BLOCKED")
         self.assertNotEqual(tier, "LOW")
 
     def test_deletion_aliases(self):
@@ -75,7 +76,7 @@ class TestSafety(unittest.TestCase):
         ]:
             tier, action = classify_risk_tier(alias_cmd)
             self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {alias_cmd} to be HIGH or CRITICAL")
-            self.assertEqual(action, "BLOCKED")
+            self.assertEqual(action, "REQUIRES_CONFIRMATION" if tier == "HIGH" else "BLOCKED")
 
     def test_invoke_expression_and_iex(self):
         """Test Invoke-Expression, iex, and backtick-obfuscated variants."""
@@ -87,8 +88,8 @@ class TestSafety(unittest.TestCase):
         ]
         for cmd in cases:
             tier, action = classify_risk_tier(cmd)
-            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be blocked as HIGH/CRITICAL")
-            self.assertEqual(action, "BLOCKED")
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be HIGH/CRITICAL")
+            self.assertEqual(action, "REQUIRES_CONFIRMATION" if tier == "HIGH" else "BLOCKED")
 
     def test_encoded_commands(self):
         """Test PowerShell -EncodedCommand / -enc flags."""
@@ -100,8 +101,8 @@ class TestSafety(unittest.TestCase):
         ]
         for cmd in cases:
             tier, action = classify_risk_tier(cmd)
-            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be blocked as HIGH/CRITICAL")
-            self.assertEqual(action, "BLOCKED")
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be HIGH/CRITICAL")
+            self.assertEqual(action, "REQUIRES_CONFIRMATION" if tier == "HIGH" else "BLOCKED")
 
     def test_download_cradles(self):
         """Test download-and-execute cradle patterns."""
@@ -114,8 +115,8 @@ class TestSafety(unittest.TestCase):
         ]
         for cmd in cases:
             tier, action = classify_risk_tier(cmd)
-            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be blocked as HIGH/CRITICAL")
-            self.assertEqual(action, "BLOCKED")
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be HIGH/CRITICAL")
+            self.assertEqual(action, "REQUIRES_CONFIRMATION" if tier == "HIGH" else "BLOCKED")
 
     def test_path_traversal_and_system_paths(self):
         """Test path traversal (..\\..\\) and sensitive Windows system directories."""
@@ -162,8 +163,9 @@ class TestSafety(unittest.TestCase):
 
         # One segment not allowlisted -> at least MEDIUM
         cmd_mixed = "Get-Process; Set-Location C:\\temp"
-        tier_m, _ = classify_risk_tier(cmd_mixed)
+        tier_m, action_m = classify_risk_tier(cmd_mixed)
         self.assertEqual(tier_m, "MEDIUM")
+        self.assertEqual(action_m, "ALLOWED")
 
     def test_combine_risk_tiers_llm_cannot_downgrade(self):
         """Verify final tier = max(rule tier, LLM tier), and LLM cannot downgrade rule results."""
@@ -176,6 +178,37 @@ class TestSafety(unittest.TestCase):
 
         # Rule tier is CRITICAL, LLM says read -> final must be CRITICAL
         self.assertEqual(combine_risk_tiers("CRITICAL", "read"), "CRITICAL")
+
+    # --- Preliminary Fix Tests ---
+
+    def test_backtick_escape_preservation_vs_ordinary_stripping(self):
+        """Ensure `n, `t, `r, `a, `0 are preserved while ` followed by ordinary chars is stripped."""
+        # Escape sequences preserved
+        esc_cmd = 'Write-Output "Line1`nLine2`tTabbed`r`a`0"'
+        deobf_esc = deobfuscate_powershell_tokens(esc_cmd)
+        self.assertEqual(deobf_esc, esc_cmd)
+
+        # Ordinary characters stripped
+        obf_cmd = "r`m file.txt"
+        deobf_ord = deobfuscate_powershell_tokens(obf_cmd)
+        self.assertEqual(deobf_ord, "rm file.txt")
+
+        tier, action = classify_risk_tier(obf_cmd)
+        self.assertEqual(tier, "HIGH")
+        self.assertEqual(action, "REQUIRES_CONFIRMATION")
+
+    def test_default_deny_unknown_command(self):
+        """Default-deny: any cmdlet/command not on allowlist and not in known rules is at least MEDIUM, never LOW."""
+        unknown_cmds = [
+            "Invoke-UnknownCmdlet -Param 1",
+            "my_custom_script.ps1",
+            "RandomExecutable.exe --flag",
+        ]
+        for cmd in unknown_cmds:
+            tier, action = classify_risk_tier(cmd)
+            self.assertEqual(tier, "MEDIUM", f"Expected {cmd} to be MEDIUM (default-deny)")
+            self.assertNotEqual(tier, "LOW", f"Unknown command {cmd} must never be LOW")
+            self.assertEqual(action, "ALLOWED")
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ class TestNewFeatures(unittest.TestCase):
 
         tier, action = classify_risk_tier("Remove-Item -Path file.txt")
         self.assertEqual(tier, "HIGH")
-        self.assertEqual(action, "BLOCKED")
+        self.assertEqual(action, "REQUIRES_CONFIRMATION")
 
         tier, action = classify_risk_tier("format C:")
         self.assertEqual(tier, "CRITICAL")
