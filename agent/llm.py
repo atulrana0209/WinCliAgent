@@ -22,6 +22,7 @@ def get_llm() -> ChatOllama:
     return ChatOllama(
         model=OLLAMA_MODEL,
         temperature=0,
+        seed=42,
     )
 
 
@@ -103,13 +104,11 @@ def generate_command(
         "4. Never use destructive commands unless the user explicitly requests the operation.\n"
         "5. Do not invent PowerShell object properties or parameters.\n"
         "6. Prefer simple, reliable commands over unnecessarily complex pipelines.\n"
-        "7. Output must directly satisfy the user's request.\n"
-        "   - For IP configuration: prefer Get-NetIPConfiguration\n"
-        "   - For running processes: prefer Get-Process\n"
-        "   - For services: prefer Get-Service\n"
-        "   - For Python files: prefer Get-ChildItem -Path . -Filter '*.py' -File\n"
-        "   - For disk usage: prefer Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free\n"
-        "   - For Windows version: prefer Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber or systeminfo\n"
+        "7. Command guidelines:\n"
+        "   - Do not restrict file searches to specific extensions (such as *.ps1) unless the user explicitly requested that extension.\n"
+        "   - The -Filter parameter accepts only a single string without commas. For multiple extensions or general files, omit -Filter or use Where-Object.\n"
+        "   - To read file contents, use Get-Content (do not use Get-ChildItem to display file contents).\n"
+        "   - Use standard Windows PowerShell cmdlets (e.g. Get-PSDrive for disk space, Get-Process for processes, Get-Location for current directory).\n"
         "8. Return your response ONLY as a JSON object matching this schema:\n"
         "{\n"
         '  "command": "<PowerShell command>",\n'

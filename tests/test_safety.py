@@ -240,6 +240,72 @@ class TestSafety(unittest.TestCase):
             self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be at least HIGH (Rule 2b)")
             self.assertIn(action, ("REQUIRES_CONFIRMATION", "BLOCKED"))
 
+    def test_ipconfig_allowlist_and_blocking(self):
+        """ipconfig is allowed bare or /all, but mutating flags are blocked/escalated."""
+        # Allowed read-only
+        tier, action = classify_risk_tier("ipconfig")
+        self.assertEqual(tier, "LOW")
+        self.assertEqual(action, "ALLOWED")
+
+        tier, action = classify_risk_tier("ipconfig /all")
+        self.assertEqual(tier, "LOW")
+        self.assertEqual(action, "ALLOWED")
+
+        # Mutating operations
+        for bad in ["ipconfig /release", "ipconfig /renew", "ipconfig /flushdns", "ipconfig /registerdns"]:
+            tier, action = classify_risk_tier(bad)
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"{bad} must be at least HIGH")
+            self.assertEqual(action, "REQUIRES_CONFIRMATION")
+
+    def test_ping_allowlist_and_blocking(self):
+        """ping requires finite count (-n), rejects continuous ping (-t), unparameterized is MEDIUM."""
+        tier, action = classify_risk_tier("ping -n 2 127.0.0.1")
+        self.assertEqual(tier, "LOW")
+        self.assertEqual(action, "ALLOWED")
+
+        # Continuous ping must be HIGH
+        tier, action = classify_risk_tier("ping -t 127.0.0.1")
+        self.assertIn(tier, ("HIGH", "CRITICAL"))
+        self.assertEqual(action, "REQUIRES_CONFIRMATION")
+
+        # Bare ping without -n is not on strict allowlist, falls back to MEDIUM (default deny)
+        tier, action = classify_risk_tier("ping 127.0.0.1")
+        self.assertEqual(tier, "MEDIUM")
+
+    def test_encoded_command_prefixes(self):
+        """Any unambiguous prefix of -EncodedCommand must be caught at HIGH."""
+        prefixes = ["-e", "-ec", "-enc", "-encoded", "-encodedcommand"]
+        for p in prefixes:
+            cmd = f"powershell {p} c3lzdGVtaW5mbw=="
+            tier, action = classify_risk_tier(cmd)
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Prefix {p} must be caught at least HIGH")
+
+    def test_native_tools_class(self):
+        """Native system tools class (reagentc, wmic, etc.) must be caught at least HIGH."""
+        cmds = [
+            "reagentc /disable",
+            "wmic shadowcopy delete",
+            "takeown /f C:\\secret.txt",
+            "icacls C:\\secret.txt /grant administrators:F",
+        ]
+        for cmd in cmds:
+            tier, action = classify_risk_tier(cmd)
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"{cmd} must be at least HIGH")
+
+    def test_authoritative_allowlist_overrides_llm_modifying(self):
+        """When a command is fully allowlisted, LLM 'modifying' cannot raise it to MEDIUM."""
+        allowlisted_cmds = [
+            "Get-ChildItem -Path . -File",
+            "Get-Process",
+            "Get-Date",
+            "Get-Location",
+            "Get-PSDrive -PSProvider FileSystem",
+        ]
+        for cmd in allowlisted_cmds:
+            tier, action = classify_risk_tier(cmd, llm_risk="modifying")
+            self.assertEqual(tier, "LOW", f"{cmd} with llm_risk='modifying' must stay LOW")
+            self.assertEqual(action, "ALLOWED")
+
 
 if __name__ == "__main__":
     unittest.main()

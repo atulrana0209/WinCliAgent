@@ -98,10 +98,14 @@ HIGH_PATTERNS = [
     r"\[char(?:\[\])?\]",
     r"-join\b",
     r"\b(?:powershell|pwsh)(\.exe)?\b.*?-(?:command|c)\b.*?(?:\$\(|\$\[|\[char|-join)",
-    # Encoded commands
-    r"\b(powershell|pwsh)(\.exe)?\b.*[-/](e|ec|enc|encodedcommand)\b",
-    # Non-PowerShell & destructive service/task management
-    r"\bwmic(\.exe)?\b.*(?:\bdelete\b|\bterminate\b|\bcall\b\s+create\b)",
+    # Encoded commands (any unambiguous prefix: -e, -ec, -enc, -encoded, -encodedcommand)
+    r"\b(powershell|pwsh)(\.exe)?\b.*[-/]e(?:ncodedcommand|ncoded|ncode|ncod|nco|nc|c)?\b",
+    # Non-PowerShell native utilities & destructive service/task management
+    r"\bwmic(\.exe)?\b.*(?:\bdelete\b|\bterminate\b|\bcall\b\s+create\b|\bshadowcopy\b)",
+    r"\breagentc(\.exe)?\b",
+    r"\b(takeown|icacls)(\.exe)?\b",
+    r"\bipconfig(\.exe)?\b.*[-/](?:release|renew|flushdns|registerdns)\b",
+    r"\bping(\.exe)?\b.*[-/]t\b",
     r"\bsc(\.exe)?\b\s+(delete|stop|config)\b",
     r"\bschtasks(\.exe)?\b\s+/delete\b",
     r"\bset-executionpolicy\b.*(bypass|unrestricted)\b",
@@ -225,6 +229,25 @@ def is_segment_on_allowlist(segment: str) -> bool:
         return False
 
     first_word = seg_clean.split()[0].strip("()`{}[]")
+
+    # Argument-aware checks for native commands
+    if first_word == "ipconfig":
+        # Allow only bare 'ipconfig' or 'ipconfig /all'
+        # Block mutating operations like /release, /renew, /flushdns, /registerdns
+        allowed_args = {"/all", "-all"}
+        args = seg_clean.split()[1:]
+        if not args or all(a in allowed_args for a in args):
+            return True
+        return False
+
+    if first_word == "ping":
+        # Reject continuous ping (-t, /t) and require finite count parameter (-n)
+        if any(t in seg_clean for t in ("-t", "/t")):
+            return False
+        if re.search(r"[-/]n\s+\d+", seg_clean) or "foreach" in seg_clean:
+            return True
+        return False
+
     if first_word in STRICT_ALLOWLIST_CMDS:
         return True
 
@@ -317,11 +340,15 @@ def classify_rule_tier_all_segments(command: str) -> tuple[str, str, bool]:
     return max_tier, primary_reason, all_allowlisted
 
 
-def combine_risk_tiers(rule_tier: str, llm_risk: Optional[str] = None) -> str:
-    """Enforce: final tier = max(rule_tier, llm_tier).
-    
-    The LLM must NEVER be able to downgrade a rule-based safety classification.
+def combine_risk_tiers(rule_tier: str, llm_risk: Optional[str] = None, is_allowlisted: bool = False) -> str:
+    """Enforce risk combination semantics:
+    - If every segment is strictly allowlisted, the rule tier (LOW) is authoritative.
+    - If not allowlisted or unknown/flagged, final tier = max(rule_tier, llm_tier).
+    - The LLM must NEVER be able to downgrade a rule-based safety classification.
     """
+    if is_allowlisted and rule_tier.upper() == "LOW":
+        return "LOW"
+
     rule_rank = TIER_RANK.get(rule_tier.upper(), 1)
 
     llm_rank = 1
@@ -342,8 +369,8 @@ def classify_risk_tier(command: str, llm_risk: Optional[str] = None) -> tuple[st
     - MEDIUM: ALLOWED (standard confirmation)
     - LOW: ALLOWED (auto-run allowed if allowlisted)
     """
-    rule_tier, _reason, _allowlisted = classify_rule_tier_all_segments(command)
-    final_tier = combine_risk_tiers(rule_tier, llm_risk)
+    rule_tier, _reason, allowlisted = classify_rule_tier_all_segments(command)
+    final_tier = combine_risk_tiers(rule_tier, llm_risk, is_allowlisted=allowlisted)
 
     if final_tier == "CRITICAL":
         return final_tier, "BLOCKED"
@@ -385,8 +412,8 @@ def screen_command_risk(
     Returns:
         (is_safe: bool, reason: str, risk_level: str, action: str)
     """
-    rule_tier, reason, _allowlisted = classify_rule_tier_all_segments(command)
-    final_tier = combine_risk_tiers(rule_tier, llm_risk)
+    rule_tier, reason, allowlisted = classify_rule_tier_all_segments(command)
+    final_tier = combine_risk_tiers(rule_tier, llm_risk, is_allowlisted=allowlisted)
 
     if final_tier == "CRITICAL":
         return False, f"Critical risk system/destructive operation: {reason}", final_tier, "BLOCKED"
