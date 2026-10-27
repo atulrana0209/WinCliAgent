@@ -130,6 +130,35 @@ def deobfuscate_powershell_tokens(command: str) -> str:
     return "".join(result)
 
 
+def deobfuscate_concatenation_and_chars(command: str) -> str:
+    """De-obfuscate [char] codes and string concatenations.
+    
+    Examples:
+        [char]82+[char]101... -> 'R'+'e'... -> 'Remove'
+        & ('Remo' + 've-Item') -> & ('Remove-Item')
+    """
+    if not command:
+        return ""
+
+    # 1. Evaluate [char]N -> 'X'
+    def _replace_char(match: re.Match) -> str:
+        try:
+            return f"'{chr(int(match.group(1)))}'"
+        except Exception:
+            return match.group(0)
+
+    text = re.sub(r"\[char\](\d+)", _replace_char, command, flags=re.IGNORECASE)
+
+    # 2. Iteratively collapse string concatenation 'a' + 'b'
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r"'([^']*)'\s*\+\s*'([^']*)'", r"'\1\2'", text)
+        text = re.sub(r'"([^"]*)"\s*\+\s*"([^"]*)"', r'"\1\2"', text)
+
+    return text
+
+
 def extract_all_command_segments(command: str) -> list[str]:
     """Tokenize a PowerShell command string into discrete command segments.
     
@@ -142,6 +171,7 @@ def extract_all_command_segments(command: str) -> list[str]:
         return []
 
     cleaned = deobfuscate_powershell_tokens(command.strip())
+    cleaned = deobfuscate_concatenation_and_chars(cleaned)
 
     segments: list[str] = []
     nested_segments: list[str] = []
@@ -284,6 +314,16 @@ def resolve_segment_alias(segment: str) -> str:
     seg_clean = segment.strip()
     if not seg_clean:
         return ""
+
+    # Unwrap call operator & ('cmd') or & 'cmd'
+    call_match = re.match(r"^&\s*(?:\(\s*['\"]([^'\"]+)['\"]\s*\)|['\"]([^'\"]+)['\"])\s*(.*)$", seg_clean)
+    if call_match:
+        cmdlet = call_match.group(1) or call_match.group(2)
+        remainder = call_match.group(3) or ""
+        canonical = POWERSHELL_ALIASES.get(cmdlet.lower(), cmdlet)
+        if remainder:
+            return f"{canonical} {remainder}".strip()
+        return canonical
 
     tokens = seg_clean.split(maxsplit=1)
     first_token = deobfuscate_powershell_tokens(tokens[0])

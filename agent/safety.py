@@ -39,7 +39,9 @@ LLM_TIER_MAP: dict[str, str] = {
 }
 
 CRITICAL_PATTERNS = [
-    r"\bformat\b",
+    r"(?<![-])\bformat\b\s+[a-zA-Z]:",
+    r"(?<![-])\bformat\b\s+/fs:",
+    r"(?<![-])\bformat\b\s+/q",
     r"\bformat-volume\b",
     r"\bclear-disk\b",
     r"\bremove-partition\b",
@@ -49,8 +51,8 @@ CRITICAL_PATTERNS = [
     r"\bbcdedit\b",
     r"\bwbadmin\b\s+delete",
     # Recursive force deletion targeting root, drive root, or wildcard
-    r"\bremove-item\b.*-recurse.*-force",
-    r"\bremove-item\b.*-force.*-recurse",
+    r"(\bremove-item\b|\brm\b|\bdel\b|\bri\b|\brd\b).*(-recurse.*-force|-force.*-recurse)",
+    r"(\bremove-item\b|\brm\b|\bdel\b|\bri\b|\brd\b).*\b[a-zA-Z]:\\?\*?",
     r"\bremove-item\b.*\*",
     r"\bdel\b\s+/[sqf]",
     r"\brmdir\b\s+/s",
@@ -90,8 +92,15 @@ HIGH_PATTERNS = [
     r"\[scriptblock\]::create",
     r"\binvoke-command\b",
     r"\bicm\b",
+    r"\[system\.io\.file\]::delete\b",
+    r"&\s*\(.*\[char\].*\)",
     # Encoded commands
-    r"\b(powershell|pwsh)\b.*(-e|-enc|-encodedcommand)\b",
+    r"\b(powershell|pwsh)\b.*[-/](e|ec|enc|encodedcommand)\b",
+    # Non-PowerShell & destructive service/task management
+    r"\bwmic\b.*(?:\bdelete\b|\bterminate\b|\bcall\b\s+create\b)",
+    r"\bsc(\.exe)?\b\s+(delete|stop|config)\b",
+    r"\bschtasks(\.exe)?\b\s+/delete\b",
+    r"\bset-executionpolicy\b.*(bypass|unrestricted)\b",
     # Download cradles & remote execution
     r"(\.downloadstring|\.downloadfile)\b",
     r"\b(invoke-webrequest|iwr|curl|wget|invoke-restmethod|irm)\b.*\|\s*(invoke-expression|iex|cmd|pwsh|powershell|bash|sh)",
