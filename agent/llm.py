@@ -23,6 +23,7 @@ def get_llm() -> ChatOllama:
         model=OLLAMA_MODEL,
         temperature=0,
         seed=42,
+        num_thread=8,
     )
 
 

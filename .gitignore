@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+logs/
+eval/results/raw/
+eval/results/*.jsonl

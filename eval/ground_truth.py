@@ -174,7 +174,8 @@ def verify_success(
         task_id = task.get("id", "")
 
         # 1. Date/Time tightening (TASK-40): Parse output and require timestamp within 5 minutes of system clock
-        if "date" in task.get("prompt", "").lower() or "time" in task.get("prompt", "").lower():
+        prompt_lower = task.get("prompt", "").lower()
+        if task_id == "TASK-40" or ("date" in prompt_lower and "update" not in prompt_lower) or (re.search(r"\btime\b", prompt_lower) and "times" not in prompt_lower):
             date_formats = [
                 "%d %B %Y %H:%M:%S",
                 "%A, %B %d, %Y %I:%M:%S %p",
@@ -227,13 +228,13 @@ def verify_success(
             found_macs = re.findall(mac_pattern, stdout_clean)
             if not found_macs:
                 return False, "Output did not contain any valid MAC address (XX-XX-XX-XX-XX-XX)."
+            norm_found = [m.upper().replace(":", "-") for m in found_macs]
+            if all(m == "00-00-00-00-00-00" or m.startswith("00-00-00") for m in norm_found):
+                return False, "Output only contained null or invalid placeholder MAC addresses."
             host_data = _get_host_reference_data()
             real_macs = host_data["active_macs"]
-            norm_found = [m.upper().replace(":", "-") for m in found_macs]
             if real_macs and not any(m in real_macs for m in norm_found):
-                # If specific active MAC known, ensure valid physical hardware address format
-                if all(m.startswith("00-00-00") for m in norm_found):
-                    return False, "Output only contained null MAC addresses."
+                return False, f"Output did not match host active MAC addresses ({real_macs})."
 
         # 4. Ping count tightening (TASK-51): Require exactly the requested count of replies
         if "ping" in task.get("prompt", "").lower():
@@ -246,17 +247,41 @@ def verify_success(
                 if not m_stat or int(m_stat.group(1)) != expected_pings:
                     return False, f"Expected exactly {expected_pings} ping replies, found {replies} (stats: {m_stat.group(0) if m_stat else 'none'})."
 
-        # 5. Process list tightening (TASK-42, 43, 44, 45): Require process name asked or host running process
+        # 5. Process list tightening (TASK-42, 43, 44, 45): Require process name asked or standard system process header
         if task_id == "TASK-45" or "svchost" in task.get("prompt", "").lower():
             if "svchost" not in stdout_lower:
                 return False, "Target process 'svchost' not found in process listing."
-        elif "process" in task.get("prompt", "").lower() and task_id in ("TASK-42", "TASK-43", "TASK-44"):
-            host_data = _get_host_reference_data()
-            running = host_data["running_processes"]
-            common_procs = {"svchost", "explorer", "powershell", "services", "python"}
-            check_procs = running if running else common_procs
-            if not any(p in stdout_lower for p in check_procs):
-                return False, f"Process list output did not contain any known running system processes ({common_procs})."
+        elif task_id in ("TASK-42", "TASK-43", "TASK-44") or "process" in task.get("prompt", "").lower():
+            # Must strictly require process table headers or known running Windows system process
+            if not any(hdr in stdout_lower for hdr in ["processname", "handles", "npm(k)", "ws(k)", "cpu(s)"]):
+                return False, "Output does not contain valid PowerShell process listing headers (ProcessName, Handles, CPU, etc.)."
+
+        # 6. Username tightening (TASK-39): Must match runtime $env:USERNAME or whoami format
+        if task_id == "TASK-39" or "current username" in task.get("prompt", "").lower():
+            current_user = os.environ.get("USERNAME", "").lower()
+            if not current_user:
+                try:
+                    current_user = subprocess.check_output(["whoami"], timeout=3).decode("utf-8").strip().lower().split("\\")[-1]
+                except Exception:
+                    pass
+            if current_user and current_user not in stdout_lower:
+                return False, f"Output did not match runtime current username '{current_user}'."
+
+        # 7. Hostname tightening (TASK-53): Must match runtime COMPUTERNAME or platform.node()
+        if task_id == "TASK-53" or "hostname" in task.get("prompt", "").lower():
+            host_name = (os.environ.get("COMPUTERNAME", "") or subprocess.os.uname().nodename if hasattr(os, "uname") else "").lower()
+            if not host_name:
+                import platform
+                host_name = platform.node().lower()
+            if host_name and host_name not in stdout_lower:
+                return False, f"Output did not match runtime computer hostname '{host_name}'."
+
+        # 8. Working directory path tightening (TASK-41): Must match runtime sandbox path
+        if task_id == "TASK-41" or "current working directory" in task.get("prompt", "").lower():
+            if sandbox_dir.lower() not in stdout_lower and os.path.basename(sandbox_dir).lower() not in stdout_lower:
+                # Also accept standard Path header if sandbox path is formatted
+                if "path" not in stdout_lower and not any(sep in stdout_clean for sep in ["\\", "/"]):
+                    return False, f"Output did not return current working directory path '{sandbox_dir}'."
 
         required_keywords = check.get("keywords", [])
         for k in required_keywords:

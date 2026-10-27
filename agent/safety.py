@@ -58,6 +58,9 @@ CRITICAL_PATTERNS = [
     r"\brmdir\b\s+/s",
     # Rule 2a: Write/destructive operations targeting system directories or registry hives = CRITICAL
     r"(?:\bremove-item\b|\bclear-content\b|\bset-content\b|\badd-content\b|\bout-file\b|\brename-item\b|\bmove-item\b|\bcopy-item\b|\bnew-item\b|\brm\b|\bdel\b|\bri\b|\brd\b|\berase\b|\brmdir\b|\bclc\b|\bsc\b|\bac\b|\bren\b|\brni\b|\bmi\b|\bmove\b|\bmv\b|\bcpi\b|\bcp\b|\bcopy\b|\bni\b).*?(?:\bc:\\windows\b|\bc:\\windows\\system32\b|\bc:\\windows\\syswow64\b|\$env:(?:windir|systemroot)\b|%windir%|%systemroot%|\bhklm:\b|\bhkcu:\b|\bregistry::\b|\b[a-zA-Z]:\\windows|windows[\\/]system32)",
+    # Destructive operations fed by pipeline from, or pointing at, a drive root or system path = CRITICAL
+    r"(?:\bget-childitem\b|\bdir\b|\bls\b|\bgci\b)\s+.*?\b[a-zA-Z]:\\?(?:\*|\s*\|).*?\|\s*(?:\bremove-item\b|\bmove-item\b|\bclear-content\b|\bdel\b|\brm\b|\bri\b|\brd\b|\berase\b)",
+    r"(?:\bget-childitem\b|\bdir\b|\bls\b|\bgci\b)\s+.*?(?:\bc:\\windows\b|\bc:\\windows\\system32\b|\$env:(?:windir|systemroot)\b).*?\|\s*(?:\bremove-item\b|\bmove-item\b|\bclear-content\b|\bdel\b|\brm\b|\bri\b|\brd\b|\berase\b)",
     r"\breg(\.exe)?\b\s+(?:delete|add|import|restore)\b.*?(?:hklm|hkcu|registry::)",
     r"\bremove-item\b\s+.*(hklm|hkcu):",
     # Raw physical drive access
@@ -318,6 +321,17 @@ def classify_rule_tier_all_segments(command: str) -> tuple[str, str, bool]:
     Returns:
         (max_tier: str, primary_reason: str, is_all_allowlisted: bool)
     """
+    cmd_clean = command.strip().lower()
+
+    # Whole-command check: destructive operations fed by pipeline from, or pointing at, drive root or system path = CRITICAL
+    pipeline_destructive_patterns = [
+        r"(?:\bget-childitem\b|\bdir\b|\bls\b|\bgci\b)\s+.*?\b[a-z]:\\?.*?\b(?:remove-item\b|\bmove-item\b|\bclear-content\b|\bdel\b|\brm\b|\bri\b|\brd\b|\berase\b)",
+        r"(?:\bget-childitem\b|\bdir\b|\bls\b|\bgci\b)\s+.*?(?:\bc:\\windows\b|\bc:\\windows\\system32\b|\$env:(?:windir|systemroot)\b).*?\b(?:remove-item\b|\bmove-item\b|\bclear-content\b|\bdel\b|\brm\b|\bri\b|\brd\b|\berase\b)",
+    ]
+    for pat in pipeline_destructive_patterns:
+        if re.search(pat, cmd_clean, flags=re.IGNORECASE):
+            return "CRITICAL", f"Destructive operation fed by pipeline targeting drive root or system path: {command}", False
+
     segments = extract_all_command_segments(command)
     if not segments:
         return "LOW", "Empty command", True
