@@ -222,13 +222,19 @@ def is_segment_on_allowlist(segment: str) -> bool:
     if not seg_clean:
         return True
 
-    # Check for dangerous arguments or redirection in read segment
-    if any(re.search(p, seg_clean, flags=re.IGNORECASE) for p in DANGEROUS_ARGUMENTS):
-        return False
-    if ">" in seg_clean or ">>" in seg_clean:
+    # Redirection or output file writing can never be auto-run on allowlist
+    if any(re.search(p, seg_clean, flags=re.IGNORECASE) for p in [r"(?:>|>>|2>|2>>)", r"\bout-file\b", r"\bset-content\b", r"\btee-object\b"]):
         return False
 
     first_word = seg_clean.split()[0].strip("()`{}[]")
+
+    # Check for dangerous arguments (harmless on observational Get-ChildItem, dangerous on mutating operations)
+    if first_word in ("get-childitem", "gci", "dir", "ls"):
+        # -Recurse and -Force are harmless observational switches on Get-ChildItem
+        pass
+    else:
+        if any(re.search(p, seg_clean, flags=re.IGNORECASE) for p in DANGEROUS_ARGUMENTS):
+            return False
 
     # Argument-aware checks for native commands
     if first_word == "ipconfig":

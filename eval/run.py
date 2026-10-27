@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,6 +20,9 @@ from collections import defaultdict
 from typing import Any, Optional
 
 import psutil
+
+# Ensure workspace root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from agent.graph import build_graph, new_thread_config
 from agent.safety import classify_risk_tier
@@ -323,6 +327,7 @@ def run_evaluation_suite(
     model_name: str,
     incremental_file: Optional[str] = None,
     resume: bool = False,
+    blind: bool = False,
 ) -> list[dict[str, Any]]:
     """Run full task suite and record incremental progress."""
     graph = build_graph()
@@ -337,24 +342,31 @@ def run_evaluation_suite(
                     r = json.loads(line)
                     results.append(r)
                     completed_ids.add(r["id"])
-        print(f"Resuming evaluation: {len(completed_ids)} tasks already completed.")
+        if not blind:
+            print(f"Resuming evaluation: {len(completed_ids)} tasks already completed.")
 
     first_task = True
     if not completed_ids:
-        print(f"Triggering authentic cold start by unloading '{model_name}'...")
+        if not blind:
+            print(f"Triggering authentic cold start by unloading '{model_name}'...")
         unload_model(model_name)
 
     for idx, task in enumerate(tasks, 1):
         if task["id"] in completed_ids:
             continue
 
-        print(f"[{idx}/{len(tasks)}] {task['id']} ({task['category']}) - {task['prompt'][:45]}... ", end="", flush=True)
+        if not blind:
+            print(f"[{idx}/{len(tasks)}] {task['id']} ({task['category']}) - {task['prompt'][:45]}... ", end="", flush=True)
 
         res = run_single_task(task, graph, is_cold_start=first_task)
         first_task = False
 
-        status_str = "PASS" if res["final_success"] else f"FAIL ({res['failure_type']})"
-        print(f"[{status_str}] ({res['total_time_s']}s)")
+        if not blind:
+            status_str = "PASS" if res["final_success"] else f"FAIL ({res['failure_type']})"
+            print(f"[{status_str}] ({res['total_time_s']}s)")
+        else:
+            if idx % 10 == 0 or idx == len(tasks):
+                print(f"[Blind Progress] Completed {idx}/{len(tasks)} tasks...", flush=True)
 
         results.append(res)
 
@@ -534,6 +546,7 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=1, help="Repetitions for mean/range reporting")
     parser.add_argument("--resume", action="store_true", help="Resume previous run from JSONL")
     parser.add_argument("--save", type=str, default=None, help="Custom output JSON path")
+    parser.add_argument("--blind", action="store_true", help="Blind execution: suppress per-task output to prevent test inspection")
     args = parser.parse_args()
 
     os.environ["OLLAMA_MODEL"] = args.model
@@ -616,7 +629,7 @@ def main() -> None:
             f.write(md_content)
     else:
         model_details = get_model_details(args.model)
-        results = run_evaluation_suite(tasks, args.model, incremental_file=jsonl_file, resume=args.resume)
+        results = run_evaluation_suite(tasks, args.model, incremental_file=jsonl_file, resume=args.resume, blind=args.blind)
         metrics = aggregate_metrics(results, args.model)
 
         full_output = {

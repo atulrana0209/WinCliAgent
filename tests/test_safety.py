@@ -306,6 +306,46 @@ class TestSafety(unittest.TestCase):
             self.assertEqual(tier, "LOW", f"{cmd} with llm_risk='modifying' must stay LOW")
             self.assertEqual(action, "ALLOWED")
 
+    def test_allowlist_redirection_and_file_mutations_blocked(self):
+        """Redirections (>, >>, 2>) and file-writing cmdlets (Out-File, Set-Content, Tee-Object) cannot be auto-run."""
+        mutating_outputs = [
+            "Get-ChildItem > output.txt",
+            "Get-Process >> procs.log",
+            "Get-Service 2> err.txt",
+            "Get-Process | Out-File procs.txt",
+            "Get-Service | Set-Content services.txt",
+            "Get-ChildItem | Tee-Object files.log",
+        ]
+        for cmd in mutating_outputs:
+            tier, action = classify_risk_tier(cmd)
+            self.assertIn(tier, ("MEDIUM", "HIGH", "CRITICAL"), f"{cmd} must not be LOW")
+            self.assertNotEqual(action, "BLOCKED" if tier == "MEDIUM" else "")
+
+    def test_scriptblock_mutations_inside_where_and_foreach(self):
+        """Mutating cmdlets nested inside Where-Object or ForEach-Object must be caught at HIGH."""
+        scriptblock_attacks = [
+            "Get-Process | Where-Object { Stop-Process $_ }",
+            "Get-ChildItem | ForEach-Object { Remove-Item $_ }",
+            "Get-Service | Where-Object { Stop-Service $_.Name -Force }",
+        ]
+        for cmd in scriptblock_attacks:
+            tier, action = classify_risk_tier(cmd)
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"{cmd} must be caught at least HIGH")
+            self.assertIn(action, ("REQUIRES_CONFIRMATION", "BLOCKED"))
+
+    def test_recurse_and_force_differential_semantics(self):
+        """-Recurse and -Force are harmless on Get-ChildItem (LOW), but dangerous on mutating operations (CRITICAL/HIGH)."""
+        # Harmless on observational commands
+        self.assertEqual(classify_risk_tier("Get-ChildItem -Recurse")[0], "LOW")
+        self.assertEqual(classify_risk_tier("Get-ChildItem -Force")[0], "LOW")
+        self.assertEqual(classify_risk_tier("Get-ChildItem -Recurse -Force")[0], "LOW")
+
+        # Dangerous on destructive operations
+        self.assertIn(classify_risk_tier("Remove-Item -Recurse")[0], ("HIGH", "CRITICAL"))
+        self.assertIn(classify_risk_tier("Remove-Item -Force")[0], ("HIGH", "CRITICAL"))
+        self.assertEqual(classify_risk_tier("Remove-Item -Recurse -Force")[0], "CRITICAL")
+        self.assertEqual(classify_risk_tier("rm -Force -Recurse D:\\*")[0], "CRITICAL")
+
 
 if __name__ == "__main__":
     unittest.main()

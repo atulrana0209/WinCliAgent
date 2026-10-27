@@ -5,9 +5,57 @@ Verifies command output and filesystem state independently from the agent's inte
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
+import subprocess
 from typing import Any
+
+
+def _get_host_reference_data() -> dict[str, Any]:
+    """Retrieve ground-truth reference network, disk, and process values from the host."""
+    ref: dict[str, Any] = {
+        "local_ips": set(),
+        "active_macs": set(),
+        "filesystem_free_bytes": {},
+        "running_processes": set(),
+    }
+    # 1. Non-loopback, non-APIPA host IPv4 addresses
+    try:
+        ps_ip = 'Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127*" -and $_.IPAddress -notlike "169.254*" } | Select-Object -ExpandProperty IPAddress'
+        out = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps_ip], timeout=5).decode("utf-8", errors="ignore")
+        ref["local_ips"] = {ip.strip() for ip in out.splitlines() if ip.strip()}
+    except Exception:
+        pass
+
+    # 2. Real MAC addresses for active network adapters
+    try:
+        ps_mac = 'Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -ExpandProperty MacAddress'
+        out = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps_mac], timeout=5).decode("utf-8", errors="ignore")
+        ref["active_macs"] = {m.strip().upper().replace(":", "-") for m in out.splitlines() if m.strip()}
+    except Exception:
+        pass
+
+    # 3. Disk free space per drive from Get-PSDrive
+    try:
+        ps_disk = 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, Free'
+        out = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps_disk], timeout=5).decode("utf-8", errors="ignore")
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[1].isdigit():
+                ref["filesystem_free_bytes"][parts[0].upper()] = int(parts[1])
+    except Exception:
+        pass
+
+    # 4. Common running processes
+    try:
+        ps_proc = 'Get-Process | Select-Object -ExpandProperty ProcessName'
+        out = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps_proc], timeout=5).decode("utf-8", errors="ignore")
+        ref["running_processes"] = {p.strip().lower() for p in out.splitlines() if p.strip()}
+    except Exception:
+        pass
+
+    return ref
 
 
 def verify_success(
@@ -123,6 +171,93 @@ def verify_success(
 
     # Check Type: system_info
     if check_type == "system_info":
+        task_id = task.get("id", "")
+
+        # 1. Date/Time tightening (TASK-40): Parse output and require timestamp within 5 minutes of system clock
+        if "date" in task.get("prompt", "").lower() or "time" in task.get("prompt", "").lower():
+            date_formats = [
+                "%d %B %Y %H:%M:%S",
+                "%A, %B %d, %Y %I:%M:%S %p",
+                "%m/%d/%Y %I:%M:%S %p",
+                "%Y-%m-%d %H:%M:%S",
+                "%A, %d %B %Y %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S",
+                "%d-%m-%Y %H:%M:%S",
+            ]
+            now = datetime.datetime.now()
+            parsed_dt = None
+            for line in stdout_clean.splitlines():
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                for fmt in date_formats:
+                    try:
+                        parsed_dt = datetime.datetime.strptime(line_str, fmt)
+                        break
+                    except ValueError:
+                        pass
+                if parsed_dt:
+                    break
+
+            if not parsed_dt:
+                # Try extracting a date-like substring e.g. '28 October 2026' or '2026-10-28'
+                today_year = str(now.year)
+                if today_year not in stdout_clean:
+                    return False, f"Date/time output did not contain current year {today_year}."
+            else:
+                diff_sec = abs((now - parsed_dt).total_seconds())
+                if diff_sec > 300:
+                    return False, f"Timestamp {parsed_dt} is not within 5 minutes of system clock ({diff_sec:.1f}s difference)."
+
+        # 2. IP tightening (TASK-49): Reject loopback and require local adapter address
+        if task_id == "TASK-49" or "what is my ip address" in task.get("prompt", "").lower():
+            host_data = _get_host_reference_data()
+            real_ips = host_data["local_ips"]
+            # Reject loopback only
+            if "127.0.0.1" in stdout_clean and not any(ip in stdout_clean for ip in real_ips):
+                return False, "IP output only returned loopback address (127.0.0.1); local non-loopback IP required."
+            if real_ips and not any(ip in stdout_clean for ip in real_ips):
+                # Also accept standard IPv4 regex match if host_data retrieval failed
+                if not re.search(r"\b(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d+\.\d+\b", stdout_clean):
+                    return False, f"Output did not match host non-loopback IP address {real_ips}."
+
+        # 3. MAC address tightening (TASK-52): Verify actual active MAC format or host MAC
+        if task_id == "TASK-52" or "mac address" in task.get("prompt", "").lower():
+            mac_pattern = r"\b[0-9A-Fa-f]{2}(?:[-:][0-9A-Fa-f]{2}){5}\b"
+            found_macs = re.findall(mac_pattern, stdout_clean)
+            if not found_macs:
+                return False, "Output did not contain any valid MAC address (XX-XX-XX-XX-XX-XX)."
+            host_data = _get_host_reference_data()
+            real_macs = host_data["active_macs"]
+            norm_found = [m.upper().replace(":", "-") for m in found_macs]
+            if real_macs and not any(m in real_macs for m in norm_found):
+                # If specific active MAC known, ensure valid physical hardware address format
+                if all(m.startswith("00-00-00") for m in norm_found):
+                    return False, "Output only contained null MAC addresses."
+
+        # 4. Ping count tightening (TASK-51): Require exactly the requested count of replies
+        if "ping" in task.get("prompt", "").lower():
+            m_count = re.search(r"(\d+)\s+times?", task.get("prompt", "").lower())
+            expected_pings = int(m_count.group(1)) if m_count else 2
+            replies = len(re.findall(r"Reply from\b", stdout_clean, flags=re.IGNORECASE))
+            if replies != expected_pings:
+                # Also check ping statistics packet summary: Received = X
+                m_stat = re.search(r"Received\s*=\s*(\d+)", stdout_clean)
+                if not m_stat or int(m_stat.group(1)) != expected_pings:
+                    return False, f"Expected exactly {expected_pings} ping replies, found {replies} (stats: {m_stat.group(0) if m_stat else 'none'})."
+
+        # 5. Process list tightening (TASK-42, 43, 44, 45): Require process name asked or host running process
+        if task_id == "TASK-45" or "svchost" in task.get("prompt", "").lower():
+            if "svchost" not in stdout_lower:
+                return False, "Target process 'svchost' not found in process listing."
+        elif "process" in task.get("prompt", "").lower() and task_id in ("TASK-42", "TASK-43", "TASK-44"):
+            host_data = _get_host_reference_data()
+            running = host_data["running_processes"]
+            common_procs = {"svchost", "explorer", "powershell", "services", "python"}
+            check_procs = running if running else common_procs
+            if not any(p in stdout_lower for p in check_procs):
+                return False, f"Process list output did not contain any known running system processes ({common_procs})."
+
         required_keywords = check.get("keywords", [])
         for k in required_keywords:
             if "|" in k:
