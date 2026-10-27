@@ -104,17 +104,17 @@ def _run_once(
             })
             return
 
-        # Handle Blocked commands
-        if not state.get("is_safe", True) or action == "BLOCKED":
+        # Handle CRITICAL hard block (no override allowed)
+        if risk == "CRITICAL":
             print(f"\n  command : {command}")
-            print(f"  Risk    : {risk}")
+            print(f"  Risk    : CRITICAL")
             print(f"  Action  : BLOCKED")
-            print(f"  [BLOCKED] {state.get('safety_reason', '')}\n")
+            print(f"  [HARD BLOCKED] {state.get('safety_reason', 'Critical risk system destructive command.')}\n")
             history_records.append({
                 "prompt": prompt,
                 "command": command,
                 "risk": risk,
-                "status": "BLOCKED",
+                "status": "HARD_BLOCKED",
                 "timestamp": datetime.now().isoformat(),
             })
             return
@@ -135,9 +135,28 @@ def _run_once(
         print(f"  Risk    : {risk}")
         print(f"  Action  : {action}")
 
-        if not auto:
-            answer = input("\nRun this command? [y/N] ").strip().lower()
-            if answer not in {"y", "yes"}:
+        # Human-in-the-loop confirmation logic per tier
+        approved = False
+        if risk == "HIGH":
+            print("  [HIGH RISK] This command can modify or delete resources.")
+            confirm_input = input("\nType 'CONFIRM' or 'YES' to execute this command: ").strip()
+            if confirm_input in {"CONFIRM", "YES"}:
+                approved = True
+            else:
+                print("Skipped (explicit confirmation not provided).\n")
+                history_records.append({
+                    "prompt": prompt,
+                    "command": command,
+                    "risk": risk,
+                    "status": "REJECTED_EXPLICIT",
+                    "timestamp": datetime.now().isoformat(),
+                })
+                return
+        elif risk == "MEDIUM":
+            answer = input("\nRun this modifying command? [y/N] ").strip().lower()
+            if answer in {"y", "yes"}:
+                approved = True
+            else:
                 print("Skipped.\n")
                 history_records.append({
                     "prompt": prompt,
@@ -147,8 +166,26 @@ def _run_once(
                     "timestamp": datetime.now().isoformat(),
                 })
                 return
+        else:  # LOW
+            if auto and state.get("is_allowlisted", True):
+                approved = True
+            else:
+                answer = input("\nRun this command? [y/N] ").strip().lower()
+                if answer in {"y", "yes"}:
+                    approved = True
+                else:
+                    print("Skipped.\n")
+                    history_records.append({
+                        "prompt": prompt,
+                        "command": command,
+                        "risk": risk,
+                        "status": "SKIPPED",
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                    return
 
-        # Resume execution
+        # Set approved in state and resume execution
+        graph.update_state(config, {"approved": approved})
         graph.invoke(None, config)
         new_state: AgentState = graph.get_state(config).values
 

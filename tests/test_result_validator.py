@@ -1,6 +1,7 @@
 """Comprehensive test suite for semantic result validation, LLM generation, safety, and agent pipeline."""
 
 import unittest
+from unittest.mock import patch
 from agent.graph import build_graph, new_thread_config
 from agent.llm import parse_response
 from agent.nodes import generate_node
@@ -155,7 +156,13 @@ class TestPhase10ResultValidator(unittest.TestCase):
         self.assertEqual(res["quality"], "success")
 
     # 13. Retry with corrected command
-    def test_retry_with_corrected_command(self):
+    @patch("agent.nodes.generate_command")
+    def test_retry_with_corrected_command(self, mock_gen):
+        mock_gen.return_value = (
+            "Get-NetIPConfiguration",
+            "Retrieves network configuration.",
+            "read",
+        )
         graph = build_graph()
         config = new_thread_config()
         graph.invoke({"prompt": "show my IP configuration"}, config)
@@ -164,7 +171,12 @@ class TestPhase10ResultValidator(unittest.TestCase):
         self.assertTrue(state.get("is_safe"))
 
     # 14. Retry does not repeat the same command
-    def test_retry_does_not_repeat_same_command(self):
+    @patch("agent.nodes.generate_command")
+    def test_retry_does_not_repeat_same_command(self, mock_gen):
+        mock_gen.side_effect = [
+            ("Get-NetIPConfiguration", "Retrieving network configuration.", "read"),
+            ("ipconfig", "Alternative command.", "read"),
+        ]
         initial_state: AgentState = {
             "prompt": "show my IP configuration",
             "previous_commands": ["Get-NetIPConfiguration"],
@@ -175,7 +187,13 @@ class TestPhase10ResultValidator(unittest.TestCase):
         self.assertGreaterEqual(len(res["previous_commands"]), 2)
 
     # 15. Retry cannot bypass safety validation
-    def test_retry_cannot_bypass_safety_validation(self):
+    @patch("agent.nodes.generate_command")
+    def test_retry_cannot_bypass_safety_validation(self, mock_gen):
+        mock_gen.return_value = (
+            "Remove-Item -Path . -Recurse -Force",
+            "Delete files",
+            "destructive",
+        )
         graph = build_graph()
         config = new_thread_config()
         graph.invoke({"prompt": "delete all files in current directory"}, config)
@@ -183,7 +201,13 @@ class TestPhase10ResultValidator(unittest.TestCase):
         self.assertFalse(state.get("is_safe", True))
 
     # 16. MAX_RETRIES = 2
-    def test_max_retries_limit(self):
+    @patch("agent.nodes.generate_command")
+    def test_max_retries_limit(self, mock_gen):
+        mock_gen.return_value = (
+            "Get-PSDrive -PSProvider FileSystem",
+            "Get disk drives",
+            "read",
+        )
         graph = build_graph()
         config = new_thread_config()
         graph.invoke({"prompt": "show disk usage"}, config)
@@ -191,7 +215,13 @@ class TestPhase10ResultValidator(unittest.TestCase):
         self.assertLessEqual(state.get("retry_count", 0), 2)
 
     # 17. Destructive command remains blocked
-    def test_destructive_command_blocked(self):
+    @patch("agent.nodes.generate_command")
+    def test_destructive_command_blocked(self, mock_gen):
+        mock_gen.return_value = (
+            "Remove-Item -Path . -Recurse -Force",
+            "Delete files",
+            "destructive",
+        )
         graph = build_graph()
         config = new_thread_config()
         graph.invoke({"prompt": "delete all files in current directory"}, config)

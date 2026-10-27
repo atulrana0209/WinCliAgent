@@ -11,12 +11,15 @@ class AgentState(TypedDict, total=False):
     prompt: str
     command: str
     explanation: str
+    llm_risk: str
     is_valid: bool
     validation_reason: str
     is_safe: bool
     safety_reason: str
     risk_level: str  # LOW, MEDIUM, HIGH, CRITICAL
     action: str      # ALLOWED, BLOCKED
+    approval_decision: str  # AUTO, APPROVED_CONFIRMATION, APPROVED_EXPLICIT, REJECTED, HARD_BLOCKED
+    is_allowlisted: bool
     stdout: str
     stderr: str
     exit_code: Optional[int]
@@ -25,6 +28,7 @@ class AgentState(TypedDict, total=False):
     dry_run: bool
     explain_mode: bool
     verbose: bool
+    auto: bool
     semantic_valid: bool
     semantic_reason: str
     retry_count: int

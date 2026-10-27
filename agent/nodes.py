@@ -9,7 +9,11 @@ from .llm import generate_command
 from .logger import log_audit_event
 from .normalizer import normalize_command
 from .result_validator import validate_result
-from .safety import screen_command_risk
+from .safety import (
+    classify_rule_tier_all_segments,
+    combine_risk_tiers,
+    screen_command_risk,
+)
 from .state import AgentState
 from .validator import validate_command
 
@@ -23,7 +27,7 @@ def generate_node(state: AgentState) -> AgentState:
     error_feedback = state.get("error_feedback")
     previous_commands = list(state.get("previous_commands", []))
 
-    command, explanation, _risk = generate_command(prompt, error_feedback=error_feedback)
+    command, explanation, llm_risk = generate_command(prompt, error_feedback=error_feedback)
     normalized = normalize_command(command)
 
     # Prevent repeating failed commands
@@ -33,17 +37,18 @@ def generate_node(state: AgentState) -> AgentState:
             f"The command '{normalized}' was ALREADY attempted and failed. "
             "Generate a completely DIFFERENT PowerShell command."
         )
-        command, explanation, _risk = generate_command(prompt, error_feedback=retry_feedback)
+        command, explanation, llm_risk = generate_command(prompt, error_feedback=retry_feedback)
         normalized = normalize_command(command)
 
     previous_commands.append(normalized)
 
     if state.get("verbose"):
-        print(f"\n[GENERATE]\nModel : Ollama (qwen2.5:3b)\nCommand: {normalized}")
+        print(f"\n[GENERATE]\nModel : Ollama (qwen2.5:3b)\nCommand: {normalized}\nLLM Risk: {llm_risk}")
 
     return {
         "command": normalized,
         "explanation": explanation,
+        "llm_risk": llm_risk,
         "executed": False,
         "semantic_valid": False,
         "previous_commands": previous_commands,
@@ -80,7 +85,10 @@ def safety_node(state: AgentState) -> AgentState:
     """Screen the generated command using 4-tier risk classification."""
 
     command = state.get("command", "")
-    is_safe, reason, risk_level, action = screen_command_risk(command)
+    llm_risk = state.get("llm_risk")
+
+    is_safe, reason, risk_level, action = screen_command_risk(command, llm_risk=llm_risk)
+    _rule_tier, _rule_reason, is_allowlisted = classify_rule_tier_all_segments(command)
 
     if state.get("verbose"):
         print(f"\n[SAFETY]\nRisk   : {risk_level}\nAction : {action}\nReason : {reason}")
@@ -90,11 +98,12 @@ def safety_node(state: AgentState) -> AgentState:
         "safety_reason": reason,
         "risk_level": risk_level,
         "action": action,
+        "is_allowlisted": is_allowlisted,
     }
 
 
 def execute_node(state: AgentState) -> AgentState:
-    """Execute command or skip if dry-run / explain mode."""
+    """Execute command or skip if dry-run / explain mode / unapproved."""
 
     # Dry-Run / Explain mode check
     if state.get("dry_run") or state.get("explain_mode"):
@@ -107,6 +116,7 @@ def execute_node(state: AgentState) -> AgentState:
             exit_code=0,
             validation="DRY_RUN",
             retry_count=state.get("retry_count", 0),
+            approval_decision="DRY_RUN",
         )
         return {
             "executed": False,
@@ -115,16 +125,62 @@ def execute_node(state: AgentState) -> AgentState:
             "exit_code": 0,
         }
 
-    if not state.get("is_safe", False) or not state.get("is_valid", False):
+    risk = state.get("risk_level", "LOW")
+    approved = state.get("approved", False)
+    is_valid = state.get("is_valid", False)
+
+    # CRITICAL: Hard block, no override
+    if risk == "CRITICAL":
         log_audit_event(
             user_prompt=state.get("prompt", ""),
             generated_command=state.get("command", ""),
-            risk=state.get("risk_level", "HIGH"),
-            action=state.get("action", "BLOCKED"),
+            risk=risk,
+            action="BLOCKED",
             approved=False,
             exit_code=None,
             validation="BLOCKED",
             retry_count=state.get("retry_count", 0),
+            approval_decision="HARD_BLOCKED",
+        )
+        return {
+            "executed": False,
+            "stdout": "",
+            "stderr": "Execution blocked: CRITICAL risk command cannot be executed under any circumstances.",
+            "exit_code": None,
+        }
+
+    # HIGH: Requires explicit typed confirmation
+    if risk == "HIGH" and not approved:
+        log_audit_event(
+            user_prompt=state.get("prompt", ""),
+            generated_command=state.get("command", ""),
+            risk=risk,
+            action="BLOCKED",
+            approved=False,
+            exit_code=None,
+            validation="BLOCKED",
+            retry_count=state.get("retry_count", 0),
+            approval_decision="REJECTED_EXPLICIT",
+        )
+        return {
+            "executed": False,
+            "stdout": "",
+            "stderr": "Execution blocked: HIGH risk command requires explicit typed confirmation.",
+            "exit_code": None,
+        }
+
+    # Validation failure check
+    if not is_valid:
+        log_audit_event(
+            user_prompt=state.get("prompt", ""),
+            generated_command=state.get("command", ""),
+            risk=risk,
+            action="BLOCKED",
+            approved=False,
+            exit_code=None,
+            validation="BLOCKED",
+            retry_count=state.get("retry_count", 0),
+            approval_decision="REJECTED",
         )
         return {
             "executed": False,
@@ -177,6 +233,15 @@ def result_validation_node(state: AgentState) -> AgentState:
     if state.get("verbose"):
         print(f"\n[RESULT]\nSemantic Validation: {'PASS' if is_valid else 'FAIL'}\nQuality: {val_res.get('quality')}\nReason: {reason}")
 
+    # Determine approval decision recorded in audit log
+    approval_decision = "AUTO"
+    if state.get("risk_level") == "HIGH":
+        approval_decision = "APPROVED_EXPLICIT"
+    elif state.get("risk_level") == "MEDIUM":
+        approval_decision = "APPROVED_CONFIRMATION"
+    elif not state.get("is_allowlisted", True):
+        approval_decision = "APPROVED_CONFIRMATION"
+
     # Audit log entry
     log_audit_event(
         user_prompt=prompt,
@@ -187,6 +252,7 @@ def result_validation_node(state: AgentState) -> AgentState:
         exit_code=exit_code,
         validation="PASS" if is_valid else "FAILED",
         retry_count=state.get("retry_count", 0),
+        approval_decision=approval_decision,
     )
 
     updates: AgentState = {
@@ -247,7 +313,18 @@ def route_after_validation(state: AgentState) -> str:
 
 
 def route_after_safety(state: AgentState) -> str:
-    """Decide whether to execute or block."""
+    """Decide whether to execute or block.
+
+    CRITICAL is a hard block: no override allowed.
+    HIGH requires explicit typed confirmation (proceeds to human-in-the-loop interrupt).
+    MEDIUM and LOW proceed to execute (subject to confirmation/auto-run).
+    """
+    risk = state.get("risk_level", "LOW")
+    if risk == "CRITICAL":
+        return "blocked"
+
+    if risk == "HIGH":
+        return "execute"
 
     if state.get("is_safe", False):
         return "execute"
