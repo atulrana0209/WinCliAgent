@@ -1,0 +1,83 @@
+{
+  "metadata": {
+    "model": "qwen2.5:3b",
+    "timestamp": "20261028_030057",
+    "git_commit": "00ba494",
+    "ollama_version": "ollama version is 0.40.6",
+    "hardware": {
+      "os": "Windows 11 (10.0.26200)",
+      "cpu": "AMD64 Family 25 Model 116 Stepping 1, AuthenticAMD",
+      "cpu_count_logical": 16,
+      "cpu_count_physical": 8,
+      "total_ram_gb": 15.29,
+      "available_ram_gb": 4.09,
+      "gpu": "None (Low-resource CPU execution)",
+      "python_version": "3.14.6"
+    }
+  },
+  "metrics": {
+    "model": "qwen2.5:3b",
+    "total_tasks": 1,
+    "first_attempt_success_rate": 100.0,
+    "final_success_rate": 100.0,
+    "risk_tier_accuracy": 0.0,
+    "average_retries": 0.0,
+    "avg_llm_latency_s": 6.7,
+    "avg_exec_latency_s": 0.41,
+    "avg_total_latency_s": 8.32,
+    "cold_start_latency_s": 8.32,
+    "avg_warm_latency_s": 0.0,
+    "peak_ollama_ram_mb": 48.3,
+    "avg_ollama_ram_mb": 48.3,
+    "by_category": {
+      "file_listing": {
+        "total": 1,
+        "success": 1,
+        "success_rate": 100.0,
+        "avg_latency_s": 8.32
+      }
+    },
+    "by_difficulty": {
+      "easy": {
+        "total": 1,
+        "success": 1,
+        "success_rate": 100.0,
+        "avg_latency_s": 8.32
+      }
+    },
+    "by_split": {
+      "dev": {
+        "total": 1,
+        "success": 1,
+        "success_rate": 100.0,
+        "avg_latency_s": 8.32
+      }
+    },
+    "failure_taxonomy": {}
+  },
+  "results": [
+    {
+      "id": "TASK-01",
+      "category": "file_listing",
+      "difficulty": "easy",
+      "split": "dev",
+      "prompt": "list all files in the current directory",
+      "command": "Get-ChildItem -Path . -File",
+      "expected_risk_tier": "LOW",
+      "actual_risk_tier": "MEDIUM",
+      "risk_tier_correct": false,
+      "executed": true,
+      "exit_code": 0,
+      "first_attempt_success": true,
+      "final_success": true,
+      "retries": 0,
+      "llm_gen_time_s": 6.697,
+      "exec_time_s": 0.406,
+      "total_time_s": 8.32,
+      "is_cold_start": true,
+      "peak_ollama_ram_mb": 48.3,
+      "failure_type": "none",
+      "check_reason": "All expected files present in output."
+    }
+  ]
+}

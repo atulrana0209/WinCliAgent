@@ -45,22 +45,20 @@ CRITICAL_PATTERNS = [
     r"\bformat-volume\b",
     r"\bclear-disk\b",
     r"\bremove-partition\b",
-    r"\bdiskpart\b",
-    r"\bcipher\b\s+/w",
-    r"\bvssadmin\b\s+delete",
-    r"\bbcdedit\b",
-    r"\bwbadmin\b\s+delete",
+    r"\bdiskpart(\.exe)?\b",
+    r"\bcipher(\.exe)?\b\s+/w",
+    r"\bvssadmin(\.exe)?\b\s+delete",
+    r"\bbcdedit(\.exe)?\b",
+    r"\bwbadmin(\.exe)?\b\s+delete",
     # Recursive force deletion targeting root, drive root, or wildcard
     r"(\bremove-item\b|\brm\b|\bdel\b|\bri\b|\brd\b).*(-recurse.*-force|-force.*-recurse)",
     r"(\bremove-item\b|\brm\b|\bdel\b|\bri\b|\brd\b).*\b[a-zA-Z]:\\?\*?",
     r"\bremove-item\b.*\*",
     r"\bdel\b\s+/[sqf]",
     r"\brmdir\b\s+/s",
-    # Deletion targeting sensitive system directories or root drives
-    r"\bremove-item\b.*\b(c:\\|c:/|[a-z]:\\|[a-z]:/|/|\\)\b",
-    r"(\bremove-item\b|\bdel\b|\brmdir\b|\brm\b|\bri\b|\brd\b).*(\bc:\\windows\b|\bc:\\windows\\system32\b|\$env:(windir|systemroot)\b|%windir%|%systemroot%)",
-    # Critical registry wipe
-    r"\breg\b\s+delete\s+(hklm|hkcu)\b",
+    # Rule 2a: Write/destructive operations targeting system directories or registry hives = CRITICAL
+    r"(?:\bremove-item\b|\bclear-content\b|\bset-content\b|\badd-content\b|\bout-file\b|\brename-item\b|\bmove-item\b|\bcopy-item\b|\bnew-item\b|\brm\b|\bdel\b|\bri\b|\brd\b|\berase\b|\brmdir\b|\bclc\b|\bsc\b|\bac\b|\bren\b|\brni\b|\bmi\b|\bmove\b|\bmv\b|\bcpi\b|\bcp\b|\bcopy\b|\bni\b).*?(?:\bc:\\windows\b|\bc:\\windows\\system32\b|\bc:\\windows\\syswow64\b|\$env:(?:windir|systemroot)\b|%windir%|%systemroot%|\bhklm:\b|\bhkcu:\b|\bregistry::\b|\b[a-zA-Z]:\\windows|windows[\\/]system32)",
+    r"\breg(\.exe)?\b\s+(?:delete|add|import|restore)\b.*?(?:hklm|hkcu|registry::)",
     r"\bremove-item\b\s+.*(hklm|hkcu):",
     # Raw physical drive access
     r"\\\\\\\\\.\\\\physicaldrive",
@@ -93,11 +91,17 @@ HIGH_PATTERNS = [
     r"\binvoke-command\b",
     r"\bicm\b",
     r"\[system\.io\.file\]::delete\b",
-    r"&\s*\(.*\[char\].*\)",
+    # Rule 2b: Statically unresolvable invocation = at least HIGH
+    r"(?:^|[;&|\s])[&.]\s*\$",
+    r"(?:^|[;&|\s])[&.]\s*\(.*?(?:\+|\bget-command\b|\bgcm\b|\[char|-join).*?\)",
+    r"\b(?:get-command|gcm)\b\s+['\"][^'\"]*[*?][^'\"]*['\"]",
+    r"\[char(?:\[\])?\]",
+    r"-join\b",
+    r"\b(?:powershell|pwsh)(\.exe)?\b.*?-(?:command|c)\b.*?(?:\$\(|\$\[|\[char|-join)",
     # Encoded commands
-    r"\b(powershell|pwsh)\b.*[-/](e|ec|enc|encodedcommand)\b",
+    r"\b(powershell|pwsh)(\.exe)?\b.*[-/](e|ec|enc|encodedcommand)\b",
     # Non-PowerShell & destructive service/task management
-    r"\bwmic\b.*(?:\bdelete\b|\bterminate\b|\bcall\b\s+create\b)",
+    r"\bwmic(\.exe)?\b.*(?:\bdelete\b|\bterminate\b|\bcall\b\s+create\b)",
     r"\bsc(\.exe)?\b\s+(delete|stop|config)\b",
     r"\bschtasks(\.exe)?\b\s+/delete\b",
     r"\bset-executionpolicy\b.*(bypass|unrestricted)\b",
@@ -105,8 +109,8 @@ HIGH_PATTERNS = [
     r"(\.downloadstring|\.downloadfile)\b",
     r"\b(invoke-webrequest|iwr|curl|wget|invoke-restmethod|irm)\b.*\|\s*(invoke-expression|iex|cmd|pwsh|powershell|bash|sh)",
     r"\bstart-bitstransfer\b",
-    r"\bcertutil\b.*-urlcache",
-    r"\bmshta\b",
+    r"\bcertutil(\.exe)?\b.*-urlcache",
+    r"\bmshta(\.exe)?\b",
     # Path traversal & targeting system directories
     r"\.\.[\\/]\.\.[\\/]",
     r"(\bc:\\windows\b|\bc:\\windows\\system32\b|\$env:(windir|systemroot)\b|%windir%|%systemroot%)",

@@ -210,6 +210,36 @@ class TestSafety(unittest.TestCase):
             self.assertNotEqual(tier, "LOW", f"Unknown command {cmd} must never be LOW")
             self.assertEqual(action, "ALLOWED")
 
+    def test_principled_system_integrity_rule_2a(self):
+        """Rule 2a: Write/destructive operations targeting system directories or registry hives must be CRITICAL."""
+        system_destructive = [
+            "Clear-Content C:\\Windows\\system32\\config\\system",
+            "Set-Content -Path C:\\Windows\\System32\\drivers\\etc\\hosts -Value '127.0.0.1 bad'",
+            "Out-File -FilePath C:\\Windows\\System32\\drivers\\etc\\hosts -InputObject 'corrupt'",
+            "reg delete HKLM\\Software\\Policies /f",
+            "reg.exe add HKLM\\Software\\Policies /v Test /d 1",
+            "Remove-Item -Path $env:windir\\system32\\drivers\\etc\\hosts -Force",
+        ]
+        for cmd in system_destructive:
+            tier, action = classify_risk_tier(cmd)
+            self.assertEqual(tier, "CRITICAL", f"Expected {cmd} to be CRITICAL (Rule 2a)")
+            self.assertEqual(action, "BLOCKED")
+
+    def test_principled_unresolvable_invocation_rule_2b(self):
+        """Rule 2b: Statically unresolvable invocation patterns must be at least HIGH."""
+        unresolvable = [
+            "& (Get-Command 'R*e-Item') file.txt",
+            "& $dynamicCmd file.txt",
+            ". $scriptVar",
+            "powershell -Command \"$([string][char[]](82,101)) file.txt\"",
+            "vssadmin.exe delete shadows /all /quiet",
+            "& ('I'+'EX') 'calc'",
+        ]
+        for cmd in unresolvable:
+            tier, action = classify_risk_tier(cmd)
+            self.assertIn(tier, ("HIGH", "CRITICAL"), f"Expected {cmd} to be at least HIGH (Rule 2b)")
+            self.assertIn(action, ("REQUIRES_CONFIRMATION", "BLOCKED"))
+
 
 if __name__ == "__main__":
     unittest.main()

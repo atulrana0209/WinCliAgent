@@ -29,6 +29,7 @@ class AgentState(TypedDict, total=False):
     explain_mode: bool
     verbose: bool
     auto: bool
+    cwd: Optional[str]
     semantic_valid: bool
     semantic_reason: str
     retry_count: int

@@ -45,8 +45,9 @@ def _resolve_shell(command: str) -> list[str]:
 def run_command(
     command: str,
     timeout: int = MAX_EXECUTION_TIME,
+    cwd: str | None = None,
 ) -> ExecutionResult:
-    """Run command with a strict execution timeout."""
+    """Run command with a strict execution timeout and optional working directory."""
 
     argv = _resolve_shell(command)
 
@@ -56,6 +57,7 @@ def run_command(
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
 
         return ExecutionResult(

@@ -192,7 +192,7 @@ def execute_node(state: AgentState) -> AgentState:
     if state.get("verbose"):
         print(f"\n[EXECUTE]\nRunning command through PowerShell...")
 
-    result = run_command(state["command"])
+    result = run_command(state["command"], cwd=state.get("cwd"))
 
     if state.get("verbose"):
         print(f"Exit Code: {result.exit_code}")
