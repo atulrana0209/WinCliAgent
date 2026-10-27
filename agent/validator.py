@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .safety import classify_risk
 
 KNOWN_COMMANDS: dict[str, list[str]] = {
@@ -44,10 +46,11 @@ def validate_command(command: str, prompt: str) -> tuple[bool, str]:
 
     # Check high-confidence mappings
     for phrase, expected_cmds in KNOWN_COMMANDS.items():
-        if phrase in prompt_lower:
+        pattern = rf"\b{re.escape(phrase)}\b"
+        if re.search(pattern, prompt_lower):
             # Skip list files rule if prompt is a deletion request
             if phrase in ["current directory", "list files"] and any(
-                w in prompt_lower for w in ["delete", "remove", "erase", "clean", "rm", "del"]
+                re.search(rf"\b{w}\b", prompt_lower) for w in ["delete", "remove", "erase", "clean", "rm", "del"]
             ):
                 continue
 

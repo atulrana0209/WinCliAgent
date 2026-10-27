@@ -124,16 +124,26 @@ def verify_success(
     # Check Type: system_info
     if check_type == "system_info":
         required_keywords = check.get("keywords", [])
-        missing = [k for k in required_keywords if k.lower() not in stdout_lower]
-        if missing:
-            return False, f"System output missing required information: {missing}"
+        for k in required_keywords:
+            if "|" in k:
+                options = [opt.strip().lower() for opt in k.split("|") if opt.strip()]
+                if not any(opt in stdout_lower for opt in options):
+                    return False, f"System output missing required information (expected any of {options})"
+            else:
+                if k.lower() not in stdout_lower:
+                    return False, f"System output missing required information: '{k}'"
         return True, "System info successfully retrieved."
 
     # Default fallback: check keywords
     keywords = check.get("keywords", [])
     if keywords:
-        missing = [k for k in keywords if k.lower() not in stdout_lower]
-        if missing:
-            return False, f"Output missing required keywords: {missing}"
+        for k in keywords:
+            if "|" in k:
+                options = [opt.strip().lower() for opt in k.split("|") if opt.strip()]
+                if not any(opt in stdout_lower for opt in options):
+                    return False, f"Output missing required keywords: expected any of {options}"
+            else:
+                if k.lower() not in stdout_lower:
+                    return False, f"Output missing required keywords: '{k}'"
 
     return True, "Task verification passed."

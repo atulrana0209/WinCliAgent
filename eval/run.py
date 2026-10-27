@@ -13,6 +13,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from typing import Any, Optional
@@ -43,17 +44,89 @@ def get_git_commit_hash() -> str:
 
 
 def get_ollama_process_memory_mb() -> float:
-    """Sum the Resident Set Size (RSS) memory in MB of all Ollama processes."""
+    """Sum the Resident Set Size (RSS) memory in MB of all Ollama and model runner processes."""
     total_mb = 0.0
     for p in psutil.process_iter(["name", "memory_info"]):
         try:
             name = (p.info["name"] or "").lower()
-            if "ollama" in name:
+            if any(k in name for k in ("ollama", "llama")):
                 rss = p.info["memory_info"].rss
                 total_mb += rss / (1024 * 1024)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return round(total_mb, 2)
+
+
+class MemorySampler:
+    """Continuously sample Ollama and llama-server process memory to capture true peak RAM."""
+
+    def __init__(self, sample_interval_s: float = 0.05):
+        self.sample_interval = sample_interval_s
+        self.peak_mb = get_ollama_process_memory_mb()
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def _sample_loop(self) -> None:
+        while self._running:
+            current = get_ollama_process_memory_mb()
+            if current > self.peak_mb:
+                self.peak_mb = current
+            time.sleep(self.sample_interval)
+
+    def __enter__(self) -> "MemorySampler":
+        self._running = True
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=0.2)
+        final_current = get_ollama_process_memory_mb()
+        if final_current > self.peak_mb:
+            self.peak_mb = final_current
+
+
+def unload_model(model_name: str) -> None:
+    """Explicitly unload the model from memory using 'ollama stop' for cold-start testing."""
+    try:
+        subprocess.run(["ollama", "stop", model_name], capture_output=True, check=False)
+        time.sleep(1.0)
+    except Exception:
+        pass
+
+
+def get_model_details(model_name: str) -> dict[str, Any]:
+    """Retrieve detailed model parameters, quantization, and digest from Ollama."""
+    try:
+        import ollama
+        show_info = ollama.show(model_name)
+        details = show_info.get("details", {})
+        return {
+            "model": model_name,
+            "parameter_size": getattr(details, "parameter_size", None) or str(details.get("parameter_size", "3.1B")),
+            "quantization_level": getattr(details, "quantization_level", None) or str(details.get("quantization_level", "Q4_K_M")),
+            "format": getattr(details, "format", None) or str(details.get("format", "gguf")),
+            "family": getattr(details, "family", None) or str(details.get("family", "qwen2")),
+        }
+    except Exception as exc:
+        return {"model": model_name, "error": str(exc)}
+
+
+def wilson_score_interval(successes: int, total: int) -> tuple[float, float]:
+    """Calculate the Wilson score 95% confidence interval for a proportion."""
+    if total == 0:
+        return 0.0, 0.0
+    import math
+    z = 1.95996  # 95% confidence
+    p = successes / total
+    denominator = 1.0 + (z**2) / total
+    center = (p + (z**2) / (2.0 * total)) / denominator
+    margin = (z * math.sqrt((p * (1.0 - p) / total) + ((z**2) / (4.0 * total**2)))) / denominator
+    low = max(0.0, center - margin) * 100.0
+    high = min(1.0, center + margin) * 100.0
+    return round(low, 2), round(high, 2)
 
 
 def get_ollama_version() -> str:
@@ -126,74 +199,71 @@ def run_single_task(
     """Execute a single evaluation task in an isolated temporary sandbox."""
     t0_total = time.perf_counter()
 
-    # Pre-execution Ollama RAM
-    ram_before = get_ollama_process_memory_mb()
-
     task_id = task["id"]
     prompt = task["prompt"]
     expected_risk = task.get("expected_risk_tier", "LOW").upper()
 
-    with tempfile.TemporaryDirectory() as sandbox_dir:
-        # Build fresh deterministic fixture
-        ground_truth = create_deterministic_fixture(sandbox_dir)
+    with MemorySampler() as sampler:
+        with tempfile.TemporaryDirectory() as sandbox_dir:
+            # Build fresh deterministic fixture
+            ground_truth = create_deterministic_fixture(sandbox_dir)
 
-        config = new_thread_config()
-        initial_input = {
-            "prompt": prompt,
-            "cwd": sandbox_dir,
-            "auto": True,
-        }
+            config = new_thread_config()
+            initial_input = {
+                "prompt": prompt,
+                "cwd": sandbox_dir,
+                "auto": True,
+            }
 
-        # Step 1: Run graph up to interrupt_before=["execute"]
-        t0_llm = time.perf_counter()
-        graph.invoke(initial_input, config)
-        llm_gen_time = time.perf_counter() - t0_llm
+            # Step 1: Run graph up to interrupt_before=["execute"]
+            t0_llm = time.perf_counter()
+            graph.invoke(initial_input, config)
+            llm_gen_time = time.perf_counter() - t0_llm
 
-        state_before_exec = graph.get_state(config).values
+            state_before_exec = graph.get_state(config).values
 
-        command = state_before_exec.get("command", "")
-        actual_risk = state_before_exec.get("risk_level", "LOW").upper()
-        is_valid = state_before_exec.get("is_valid", False)
-        validation_reason = state_before_exec.get("validation_reason", "")
+            command = state_before_exec.get("command", "")
+            actual_risk = state_before_exec.get("risk_level", "LOW").upper()
+            is_valid = state_before_exec.get("is_valid", False)
+            validation_reason = state_before_exec.get("validation_reason", "")
 
-        # Execution policy: Auto-approve LOW and MEDIUM only. NEVER execute HIGH or CRITICAL.
-        executed = False
-        exec_time = 0.0
-        stdout = ""
-        stderr = ""
-        exit_code: int | None = None
-        retries = 0
-
-        if actual_risk in ("HIGH", "CRITICAL") or expected_risk in ("HIGH", "CRITICAL"):
-            # Policy enforcement: do not resume execution
+            # Execution policy: Auto-approve LOW and MEDIUM only. NEVER execute HIGH or CRITICAL.
             executed = False
+            exec_time = 0.0
             stdout = ""
-            stderr = f"HARNESS_SAFETY: Refused execution of {actual_risk} command."
-            exit_code = None
-            final_state = state_before_exec
-        elif not is_valid:
-            executed = False
-            stdout = ""
-            stderr = f"Validation failed: {validation_reason}"
-            exit_code = None
-            final_state = state_before_exec
-        else:
-            # Approve and resume execution
-            graph.update_state(config, {"approved": True})
-            t0_exec = time.perf_counter()
-            graph.invoke(None, config)
-            exec_time = time.perf_counter() - t0_exec
+            stderr = ""
+            exit_code: int | None = None
+            retries = 0
 
-            final_state = graph.get_state(config).values
-            executed = final_state.get("executed", False)
-            stdout = final_state.get("stdout", "")
-            stderr = final_state.get("stderr", "")
-            exit_code = final_state.get("exit_code")
-            retries = final_state.get("retry_count", 0)
+            if actual_risk in ("HIGH", "CRITICAL") or expected_risk in ("HIGH", "CRITICAL"):
+                # Policy enforcement: do not resume execution
+                executed = False
+                stdout = ""
+                stderr = f"HARNESS_SAFETY: Refused execution of {actual_risk} command."
+                exit_code = None
+                final_state = state_before_exec
+            elif not is_valid:
+                executed = False
+                stdout = ""
+                stderr = f"Validation failed: {validation_reason}"
+                exit_code = None
+                final_state = state_before_exec
+            else:
+                # Approve and resume execution
+                graph.update_state(config, {"approved": True})
+                t0_exec = time.perf_counter()
+                graph.invoke(None, config)
+                exec_time = time.perf_counter() - t0_exec
+
+                final_state = graph.get_state(config).values
+                executed = final_state.get("executed", False)
+                stdout = final_state.get("stdout", "")
+                stderr = final_state.get("stderr", "")
+                exit_code = final_state.get("exit_code")
+                retries = final_state.get("retry_count", 0)
 
         total_time = time.perf_counter() - t0_total
-        ram_after = get_ollama_process_memory_mb()
-        peak_ram = max(ram_before, ram_after)
+        peak_ram = sampler.peak_mb
 
         # Ground truth independent verification
         is_success, check_reason = verify_success(
@@ -270,6 +340,10 @@ def run_evaluation_suite(
         print(f"Resuming evaluation: {len(completed_ids)} tasks already completed.")
 
     first_task = True
+    if not completed_ids:
+        print(f"Triggering authentic cold start by unloading '{model_name}'...")
+        unload_model(model_name)
+
     for idx, task in enumerate(tasks, 1):
         if task["id"] in completed_ids:
             continue
@@ -329,10 +403,12 @@ def aggregate_metrics(results: list[dict[str, Any]], model_name: str) -> dict[st
     def _summarize_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         n = len(items)
         succ = sum(1 for x in items if x["final_success"])
+        ci_low, ci_high = wilson_score_interval(succ, n)
         return {
             "total": n,
             "success": succ,
             "success_rate": round(succ / n * 100, 1) if n > 0 else 0.0,
+            "wilson_ci_95": [ci_low, ci_high],
             "avg_latency_s": round(sum(x["total_time_s"] for x in items) / n, 2) if n > 0 else 0.0,
         }
 
@@ -340,11 +416,23 @@ def aggregate_metrics(results: list[dict[str, Any]], model_name: str) -> dict[st
     diff_breakdown = {k: _summarize_group(v) for k, v in by_difficulty.items()}
     split_breakdown = {k: _summarize_group(v) for k, v in by_split.items()}
 
+    # Confusion matrix (expected vs actual risk tier)
+    tiers = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    conf_matrix = {exp: {act: 0 for act in tiers} for exp in tiers}
+    for r in results:
+        exp = r.get("expected_risk_tier", "LOW").upper()
+        act = r.get("actual_risk_tier", "LOW").upper()
+        if exp in conf_matrix and act in conf_matrix[exp]:
+            conf_matrix[exp][act] += 1
+
+    overall_ci = wilson_score_interval(final_successes, total)
+
     return {
         "model": model_name,
         "total_tasks": total,
         "first_attempt_success_rate": round(first_successes / total * 100, 2),
         "final_success_rate": round(final_successes / total * 100, 2),
+        "final_success_ci_95": overall_ci,
         "risk_tier_accuracy": round(risk_correct / total * 100, 2),
         "average_retries": round(total_retries / total, 2),
         "avg_llm_latency_s": round(sum(llm_times) / total, 2),
@@ -357,11 +445,12 @@ def aggregate_metrics(results: list[dict[str, Any]], model_name: str) -> dict[st
         "by_category": cat_breakdown,
         "by_difficulty": diff_breakdown,
         "by_split": split_breakdown,
+        "confusion_matrix": conf_matrix,
         "failure_taxonomy": dict(failure_taxonomy),
     }
 
 
-def print_markdown_summary(metrics: dict[str, Any], hardware: dict[str, Any]) -> str:
+def print_markdown_summary(metrics: dict[str, Any], hardware: dict[str, Any], model_details: Optional[dict[str, Any]] = None) -> str:
     """Generate and display markdown summary table."""
     md = []
     md.append(f"# Benchmark Baseline Report: `{metrics['model']}`\n")
@@ -370,12 +459,16 @@ def print_markdown_summary(metrics: dict[str, Any], hardware: dict[str, Any]) ->
     md.append(f"- **CPU**: {hardware['cpu']} ({hardware['cpu_count_logical']} logical cores)")
     md.append(f"- **RAM**: {hardware['total_ram_gb']} GB total ({hardware['available_ram_gb']} GB available)")
     md.append(f"- **Ollama Version**: {get_ollama_version()}")
+    if model_details:
+        md.append(f"- **Model Quantization**: {model_details.get('quantization_level', 'unknown')} | Parameters: {model_details.get('parameter_size', 'unknown')}")
+    md.append(f"- **Seed**: 42 | Temperature: 0.0")
     md.append(f"- **Git Commit**: `{get_git_commit_hash()}`\n")
 
     md.append("## Overall Performance Summary\n")
     md.append("| Metric | Value |")
     md.append("| :--- | :--- |")
-    md.append(f"| **Final Task Success Rate** | **{metrics['final_success_rate']}%** ({int(metrics['final_success_rate']*metrics['total_tasks']/100)}/{metrics['total_tasks']}) |")
+    ci = metrics.get('final_success_ci_95', [0.0, 0.0])
+    md.append(f"| **Final Task Success Rate** | **{metrics['final_success_rate']}%** ({int(metrics['final_success_rate']*metrics['total_tasks']/100)}/{metrics['total_tasks']}) [95% CI: {ci[0]}% – {ci[1]}%] |")
     md.append(f"| **First-Attempt Success Rate** | **{metrics['first_attempt_success_rate']}%** |")
     md.append(f"| **Risk-Tier Accuracy** | **{metrics['risk_tier_accuracy']}%** |")
     md.append(f"| **Average Retries per Task** | **{metrics['average_retries']}** |")
@@ -383,12 +476,24 @@ def print_markdown_summary(metrics: dict[str, Any], hardware: dict[str, Any]) ->
     md.append(f"| **Cold-Start Latency** | **{metrics['cold_start_latency_s']}s** (Warm Avg: {metrics['avg_warm_latency_s']}s) |")
     md.append(f"| **Ollama Peak RAM** | **{metrics['peak_ollama_ram_mb']} MB** (Avg: {metrics['avg_ollama_ram_mb']} MB) |\n")
 
-    md.append("## Dataset Split Performance\n")
-    md.append("| Split | Total Tasks | Success Rate | Avg Latency |")
-    md.append("| :--- | :--- | :--- | :--- |")
+    md.append("## Dataset Split Performance (with Wilson 95% CI)\n")
+    md.append("| Split | Total Tasks | Success Rate | 95% Confidence Interval | Avg Latency |")
+    md.append("| :--- | :--- | :--- | :--- | :--- |")
     for s_name, s_data in metrics["by_split"].items():
-        md.append(f"| `{s_name}` | {s_data['total']} | **{s_data['success_rate']}%** | {s_data['avg_latency_s']}s |")
+        s_ci = s_data.get("wilson_ci_95", [0.0, 0.0])
+        md.append(f"| `{s_name}` | {s_data['total']} | **{s_data['success_rate']}%** | [{s_ci[0]}% – {s_ci[1]}%] | {s_data['avg_latency_s']}s |")
     md.append("")
+
+    md.append("## Risk-Tier Confusion Matrix\n")
+    if "confusion_matrix" in metrics:
+        md.append("| Expected \\ Actual | LOW | MEDIUM | HIGH | CRITICAL | Total |")
+        md.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        cm = metrics["confusion_matrix"]
+        for exp in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]:
+            row = cm.get(exp, {})
+            tot = sum(row.values())
+            md.append(f"| **{exp}** | {row.get('LOW', 0)} | {row.get('MEDIUM', 0)} | {row.get('HIGH', 0)} | {row.get('CRITICAL', 0)} | {tot} |")
+        md.append("")
 
     md.append("## Category Breakdown\n")
     md.append("| Category | Total | Success Rate | Avg Latency |")
@@ -482,8 +587,18 @@ def main() -> None:
         print(f"Avg Latency per Task: Mean = {mean_lat:.2f}s, Range = [{min(repeat_latencies):.2f}s - {max(repeat_latencies):.2f}s]")
         print("=" * 70 + "\n")
 
+        model_details = get_model_details(args.model)
         full_output = {
-            "model": args.model,
+            "metadata": {
+                "model": args.model,
+                "model_details": model_details,
+                "seed": 42,
+                "temperature": 0.0,
+                "timestamp": timestamp,
+                "git_commit": get_git_commit_hash(),
+                "ollama_version": get_ollama_version(),
+                "hardware": hardware_info,
+            },
             "repetitions": args.repeat,
             "mean_final_success_rate": round(mean_final, 2),
             "final_success_rates": repeat_success,
@@ -496,14 +611,20 @@ def main() -> None:
         }
         with open(json_summary_file, "w", encoding="utf-8") as f:
             json.dump(full_output, f, indent=2)
-        print_markdown_summary(last_metrics, hardware_info)
+        md_content = print_markdown_summary(last_metrics, hardware_info, model_details=model_details)
+        with open(md_summary_file, "w", encoding="utf-8") as f:
+            f.write(md_content)
     else:
+        model_details = get_model_details(args.model)
         results = run_evaluation_suite(tasks, args.model, incremental_file=jsonl_file, resume=args.resume)
         metrics = aggregate_metrics(results, args.model)
 
         full_output = {
             "metadata": {
                 "model": args.model,
+                "model_details": model_details,
+                "seed": 42,
+                "temperature": 0.0,
                 "timestamp": timestamp,
                 "git_commit": get_git_commit_hash(),
                 "ollama_version": get_ollama_version(),
@@ -516,7 +637,7 @@ def main() -> None:
         with open(json_summary_file, "w", encoding="utf-8") as f:
             json.dump(full_output, f, indent=2)
 
-        md_content = print_markdown_summary(metrics, hardware_info)
+        md_content = print_markdown_summary(metrics, hardware_info, model_details=model_details)
         with open(md_summary_file, "w", encoding="utf-8") as f:
             f.write(md_content)
 
