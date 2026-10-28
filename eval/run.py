@@ -222,10 +222,18 @@ def run_single_task(
 
             # Step 1: Run graph up to interrupt_before=["execute"]
             t0_llm = time.perf_counter()
-            graph.invoke(initial_input, config)
-            llm_gen_time = time.perf_counter() - t0_llm
-
-            state_before_exec = graph.get_state(config).values
+            try:
+                graph.invoke(initial_input, config)
+                llm_gen_time = time.perf_counter() - t0_llm
+                state_before_exec = graph.get_state(config).values
+            except Exception as exc:
+                llm_gen_time = time.perf_counter() - t0_llm
+                state_before_exec = {
+                    "command": "",
+                    "risk_level": "LOW",
+                    "is_valid": False,
+                    "validation_reason": f"Execution/generation error: {exc}",
+                }
 
             command = state_before_exec.get("command", "")
             actual_risk = state_before_exec.get("risk_level", "LOW").upper()

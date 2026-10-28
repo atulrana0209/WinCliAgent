@@ -345,6 +345,36 @@ Every execution or dry-run event is appended as a JSON record to `logs/agent.log
 
 ---
 
+## 🔬 Model Comparison: `qwen2.5:3b` vs `qwen2.5:1.5b`
+
+Evaluated on the 65-task development benchmark under identical conditions (LLM-only mode without deterministic templates, temperature = 0.0, seed = 42, `num_thread = 8`, AMD Ryzen 16 logical cores, Windows 11):
+
+| Metric | `qwen2.5:3b` | `qwen2.5:1.5b` | Delta |
+| :--- | :--- | :--- | :--- |
+| **Final Success Rate** | **86.15%** (56/65) | **78.46%** (50/65) | -7.69% |
+| **Wilson 95% Confidence Interval** | [75.73% – 92.54%] | [67.03% – 86.71%] | — |
+| **First-Attempt Success Rate** | 81.54% (53/65) | 75.38% (49/65) | -6.16% |
+| **Average Retries per Task** | 0.11 | 0.11 | 0.00 |
+| **Avg Total Latency** | **6.82s** | **24.86s** | +18.04s |
+| **Avg LLM Generation Latency** | 3.13s | 21.39s | +18.26s |
+| **Avg Execution Latency** | 1.29s | 1.24s | -0.05s |
+| **Peak Ollama Host RAM** | **2225.38 MB** | **1470.38 MB** | **-755.00 MB (-33.9%)** |
+| **Average Ollama Host RAM** | 2224.46 MB | 1396.74 MB | -827.72 MB (-37.2%) |
+| **Model Size on Disk** | 1.9 GB | 986 MB | **-914 MB (-48.1%)** |
+| **Parameter Count / Quantization** | 3.1B / Q4_K_M | 1.5B / Q4_K_M | — |
+| **JSON Schema Validation Failure Rate** | 0.0% (0/65) | 1.54% (1/65) | +1.54% |
+
+### Paired Task Flips
+
+- **Tasks 3B Solves but 1.5B Fails (11)**: `TASK-15`, `TASK-23`, `TASK-24`, `TASK-25`, `TASK-32`, `TASK-39`, `TASK-51`, `TASK-53`, `TASK-55`, `TASK-60`, `TASK-61`
+- **Tasks 1.5B Solves but 3B Fails (6)**: `TASK-17`, `TASK-18`, `TASK-22`, `TASK-35`, `TASK-36`, `TASK-37`
+
+### Conclusion: Trade-Off Analysis on Low-Resource Hardware
+
+While `qwen2.5:1.5b` achieves significant resource reductions—slashing disk footprint by 48.1% (986 MB vs 1.9 GB) and peak host memory by 33.9% (1,470 MB vs 2,225 MB)—it is **not** currently recommended as an unconditional drop-in replacement for `qwen2.5:3b`. Accuracy drops by 7.69 percentage points (78.46% vs 86.15%), but the more critical defect is generation stability: on complex filtering tasks (e.g. `TASK-12`), 1.5B is prone to repetitive token loops that skew average latency to 24.86s (vs 6.82s for 3B) until hitting Ollama token repeat limits. However, for severely memory-constrained devices with < 8 GB RAM where 3B cannot fit alongside user workloads, 1.5B remains viable when combined with the Step 4.3 deterministic command templates (which intercept common queries in ~15 ms and reduce exposure to repetition bugs).
+
+---
+
 ## 🧰 Tech Stack
 
 - **Python 3.14**

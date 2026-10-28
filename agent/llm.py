@@ -47,7 +47,7 @@ def get_llm(use_structured_format: bool = True) -> ChatOllama:
     format_arg = CommandOutput.model_json_schema() if use_structured_format else None
 
     return ChatOllama(
-        model=OLLAMA_MODEL,
+        model=os.getenv("OLLAMA_MODEL", OLLAMA_MODEL),
         temperature=0,
         seed=42,
         num_thread=8,
@@ -212,8 +212,8 @@ def generate_command(
         response = llm.invoke(messages)
         text = response.content.strip()
         return parse_response(text)
-    except (ValidationError, RuntimeError) as initial_err:
-        logger.warning("Initial response failed schema validation: %s. Re-prompting once with schema error.", initial_err)
+    except Exception as initial_err:
+        logger.warning("Initial response failed schema validation or invocation: %s. Re-prompting once with schema error.", initial_err)
         # Re-prompt once with the schema error
         reprompt_messages = [
             SystemMessage(content=system_prompt),
@@ -226,6 +226,9 @@ def generate_command(
                 )
             ),
         ]
-        second_response = llm.invoke(reprompt_messages)
-        second_text = second_response.content.strip()
-        return parse_response(second_text)
+        try:
+            second_response = llm.invoke(reprompt_messages)
+            second_text = second_response.content.strip()
+            return parse_response(second_text)
+        except Exception as second_err:
+            raise RuntimeError(f"LLM command generation failed after re-prompt: {second_err}") from second_err
