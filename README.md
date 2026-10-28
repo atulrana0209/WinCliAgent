@@ -1,5 +1,7 @@
 # WinCliAgent
 
+[![CI](https://github.com/atulrana0209/WinCliAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/atulrana0209/WinCliAgent/actions/workflows/ci.yml)
+
 A local AI-powered Windows CLI agent that converts natural-language requests into PowerShell commands, normalizes syntax, evaluates 4-tier risk levels, enforces process execution timeouts, requires human confirmation, records audit logs, and validates result quality.
 
 Built with **LangGraph + Ollama + Qwen 2.5:3B**.
@@ -25,8 +27,8 @@ Run this command? [y/N] y
 
 --- output ---
 InterfaceAlias       : Wi-Fi
-IPv4Address          : 10.22.2.207
-IPv4DefaultGateway   : 10.22.0.1
+IPv4Address          : 192.0.2.100
+IPv4DefaultGateway   : 192.0.2.1
 
   Result validation: PASS
 ```
@@ -282,19 +284,33 @@ WinCliAgent — type a request, 'history' to view past runs, or 'exit' to quit.
 
 ## 🧪 Testing
 
-Run the full automated test suite:
-```powershell
-python -m unittest discover tests
-```
+The test suite is structured into three clear tiers for reliability and CI speed:
 
-**Verification Output**:
-```text
-........................................
-----------------------------------------------------------------------
-Ran 40 tests in 9.258s
+1. **Hermetic Tests (Default CI Suite)**:
+   - Completely offline with mocked LLM and mocked executor. Runs in under 15 seconds.
+   - Run command:
+     ```powershell
+     python -m unittest discover tests
+     ```
+   - **Verification**: 99 hermetic tests passing (6 skipped host-dependent / live tests).
 
-OK
-```
+2. **Host-Dependent Tests (Live Windows / PowerShell)**:
+   - Validates live subprocess invocation, timeout termination (code 124), and output stream truncation (> 100 KB).
+   - Run command:
+     ```powershell
+     $env:RUN_HOST_TESTS="1"; python -m unittest discover tests; Remove-Item Env:\RUN_HOST_TESTS
+     ```
+   - **Count**: 4 tests in `tests/test_executor.py`.
+
+3. **Live-LLM Integration Tests (Live Ollama)**:
+   - Validates end-to-end inference and safety checks against a running Ollama daemon.
+   - Run command:
+     ```powershell
+     $env:RUN_INTEGRATION_TESTS="1"; python -m unittest discover tests; Remove-Item Env:\RUN_INTEGRATION_TESTS
+     ```
+   - **Count**: 2 tests in `tests/test_integration.py`.
+
+**Total Test Count**: 105 tests across 14 test modules (99 hermetic, 4 host-dependent, 2 live-LLM).
 
 ---
 

@@ -258,7 +258,7 @@ def verify_success(
 
         # 6. Username tightening (TASK-39): Must match runtime $env:USERNAME or whoami format
         if task_id == "TASK-39" or "current username" in task.get("prompt", "").lower():
-            current_user = os.environ.get("USERNAME", "").lower()
+            current_user = (os.environ.get("USERNAME") or os.environ.get("USER", "")).lower()
             if not current_user:
                 try:
                     current_user = subprocess.check_output(["whoami"], timeout=3).decode("utf-8").strip().lower().split("\\")[-1]

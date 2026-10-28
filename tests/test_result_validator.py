@@ -16,7 +16,7 @@ class TestPhase10ResultValidator(unittest.TestCase):
         res = validate_result(
             user_prompt="show my IP configuration",
             command="Get-NetIPConfiguration",
-            stdout="InterfaceAlias : Wi-Fi\nIPv4Address : 10.22.2.207\nIPv4DefaultGateway : 10.22.0.1",
+            stdout="InterfaceAlias : Wi-Fi\nIPv4Address : 192.0.2.1\nIPv4DefaultGateway : 192.0.2.254",
             stderr="",
             exit_code=0,
         )

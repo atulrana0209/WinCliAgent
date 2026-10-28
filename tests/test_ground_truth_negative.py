@@ -12,6 +12,7 @@ import os
 import platform
 import subprocess
 import unittest
+from unittest.mock import patch
 
 from eval.ground_truth import verify_success
 
@@ -74,13 +75,12 @@ class TestGroundTruthNegativeControls(unittest.TestCase):
         success, reason = verify_success(task, file_listing, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
         self.assertFalse(success, f"IP check must fail on directory listing: {reason}")
 
-        # Correct output: valid private host IP format derived at runtime
-        from eval.ground_truth import _get_host_reference_data
-        host_ips = _get_host_reference_data()["local_ips"]
-        sample_ip = list(host_ips)[0] if host_ips else "192.168.1.50"
+        # Correct output: valid host IP format (documentation IP, RFC 5737 hermetic test)
+        sample_ip = "192.0.2.50"
         valid_ip = f"IPv4 Address. . . . . . . . . . . : {sample_ip}"
-        success, reason = verify_success(task, valid_ip, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
-        self.assertTrue(success, f"IP check must pass on valid non-loopback IP: {reason}")
+        with patch("eval.ground_truth._get_host_reference_data", return_value={"local_ips": {sample_ip}, "active_macs": set()}):
+            success, reason = verify_success(task, valid_ip, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
+            self.assertTrue(success, f"IP check must pass on valid non-loopback IP: {reason}")
 
     # 3. TASK-52: MAC Address
     def test_mac_address_negative_controls(self):
@@ -103,13 +103,12 @@ class TestGroundTruthNegativeControls(unittest.TestCase):
         success, reason = verify_success(task, no_mac, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
         self.assertFalse(success, f"MAC check must fail when no MAC address is present: {reason}")
 
-        # Correct output: valid formatted MAC address derived at runtime
-        from eval.ground_truth import _get_host_reference_data
-        host_macs = _get_host_reference_data()["active_macs"]
-        sample_mac = list(host_macs)[0] if host_macs else "00-14-22-01-23-45"
+        # Correct output: valid formatted MAC address (hermetic test)
+        sample_mac = "00-14-22-01-23-45"
         valid_mac = f"Wi-Fi {sample_mac} Up"
-        success, reason = verify_success(task, valid_mac, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
-        self.assertTrue(success, f"MAC check must pass on valid MAC: {reason}")
+        with patch("eval.ground_truth._get_host_reference_data", return_value={"local_ips": set(), "active_macs": {sample_mac}}):
+            success, reason = verify_success(task, valid_mac, "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
+            self.assertTrue(success, f"MAC check must pass on valid MAC: {reason}")
 
     # 4. TASK-51: Ping Reply Count
     def test_ping_count_negative_controls(self):
@@ -208,7 +207,7 @@ class TestGroundTruthNegativeControls(unittest.TestCase):
         self.assertFalse(success, f"Username check must fail on directory listing: {reason}")
 
         # Correct output: actual runtime username
-        user = os.environ.get("USERNAME", "tester")
+        user = os.environ.get("USERNAME") or os.environ.get("USER", "tester")
         host = platform.node()
         success, reason = verify_success(task, f"{host}\\{user}", "", 0, "LOW", True, self.sandbox_dir, self.ground_truth)
         self.assertTrue(success, f"Username check must pass on actual runtime username: {reason}")

@@ -5,6 +5,7 @@ These tests are automatically skipped if the local Ollama daemon is not reachabl
 
 from __future__ import annotations
 
+import os
 import unittest
 from agent.graph import build_graph, new_thread_config
 from agent.state import AgentState
@@ -16,7 +17,10 @@ class TestAgentLiveIntegration(unittest.TestCase):
     def setUp(self):
         self.graph = build_graph()
 
-    @unittest.skipUnless(is_ollama_reachable(), "Ollama is not running or reachable")
+    @unittest.skipUnless(
+        os.getenv("RUN_INTEGRATION_TESTS") == "1" and is_ollama_reachable(),
+        "Live Ollama integration test (skipped by default); set RUN_INTEGRATION_TESTS=1 to run",
+    )
     def test_live_safe_request_flow(self):
         config = new_thread_config()
         self.graph.invoke({"prompt": "show my IP configuration"}, config)
@@ -26,7 +30,10 @@ class TestAgentLiveIntegration(unittest.TestCase):
         self.assertTrue(state.get("is_safe"))
         self.assertTrue(bool(state.get("command")))
 
-    @unittest.skipUnless(is_ollama_reachable(), "Ollama is not running or reachable")
+    @unittest.skipUnless(
+        os.getenv("RUN_INTEGRATION_TESTS") == "1" and is_ollama_reachable(),
+        "Live Ollama integration test (skipped by default); set RUN_INTEGRATION_TESTS=1 to run",
+    )
     def test_live_destructive_request_blocked(self):
         config = new_thread_config()
         self.graph.invoke({"prompt": "delete all files in current directory"}, config)
