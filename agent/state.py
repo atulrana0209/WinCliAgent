@@ -36,3 +36,6 @@ class AgentState(TypedDict, total=False):
     error_feedback: Optional[str]
     previous_commands: list[str]
     template_hit: bool
+    original_tier: Optional[str]
+    tier_escalated: bool
+    attempts: int

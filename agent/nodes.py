@@ -18,6 +18,7 @@ from .state import AgentState
 from .validator import validate_command
 
 MAX_RETRIES = 2
+RISK_RANKS = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 
 def generate_node(state: AgentState) -> AgentState:
@@ -43,22 +44,15 @@ def generate_node(state: AgentState) -> AgentState:
 
     normalized = normalize_command(command)
 
-    # Prevent repeating failed commands
-    if normalized.strip().lower() in [c.strip().lower() for c in previous_commands]:
-        retry_feedback = (
-            f"{error_feedback or ''}\n\n"
-            f"The command '{normalized}' was ALREADY attempted and failed. "
-            "Generate a completely DIFFERENT PowerShell command."
-        )
-        command, explanation, llm_risk = generate_command(prompt, error_feedback=retry_feedback)
-        normalized = normalize_command(command)
-        template_hit = False
-
+    # Identical command check: if the model returned an identical command, count it as a failed attempt
+    is_duplicate = normalized.strip().lower() in [c.strip().lower() for c in previous_commands]
     previous_commands.append(normalized)
 
     if state.get("verbose"):
         origin = "Template" if template_hit else "Ollama (qwen2.5:3b)"
         print(f"\n[GENERATE]\nSource : {origin}\nCommand: {normalized}\nLLM Risk: {llm_risk}")
+
+    current_attempts = state.get("attempts", 0) + 1
 
     return {
         "command": normalized,
@@ -68,16 +62,23 @@ def generate_node(state: AgentState) -> AgentState:
         "semantic_valid": False,
         "previous_commands": previous_commands,
         "template_hit": template_hit,
+        "attempts": current_attempts,
+        "is_duplicate": is_duplicate,
     }
 
 
 def validate_node(state: AgentState) -> AgentState:
-    """Check whether the generated command matches the user's request."""
+    """Check whether the generated command matches the user's request and is not a duplicate."""
 
     command = state.get("command", "")
     prompt = state.get("prompt", "")
+    is_duplicate = state.get("is_duplicate", False)
 
-    is_valid, reason = validate_command(command, prompt)
+    if is_duplicate:
+        is_valid = False
+        reason = f"Model repeated previously failed command '{command}'. Counted as failed attempt."
+    else:
+        is_valid, reason = validate_command(command, prompt)
 
     if state.get("verbose"):
         print(f"\n[VALIDATE]\nSyntax & Concept Check: {'PASS' if is_valid else 'FAIL'}\nReason: {reason}")
@@ -90,21 +91,52 @@ def validate_node(state: AgentState) -> AgentState:
     if not is_valid:
         updates["error_feedback"] = (
             f"Original request:\n{prompt}\n\n"
-            f"Previous command:\n{command}\n\n"
-            f"Validation problem:\n{reason}"
+            f"Failed command:\n{command}\n\n"
+            f"Validation problem:\n{reason}\n\n"
+            "Generate a DIFFERENT PowerShell command that directly solves the request. "
+            "Do NOT repeat the failed command."
+        )
+        # Audit log the failed attempt
+        log_audit_event(
+            user_prompt=prompt,
+            generated_command=command,
+            risk=state.get("risk_level", "LOW"),
+            action="RETRY" if state.get("retry_count", 0) < MAX_RETRIES else "BLOCKED",
+            approved=False,
+            exit_code=None,
+            validation=f"VALIDATION_FAIL: {reason[:100]}",
+            retry_count=state.get("retry_count", 0),
+            approval_decision="RETRY",
         )
 
     return updates
 
 
 def safety_node(state: AgentState) -> AgentState:
-    """Screen the generated command using 4-tier risk classification."""
+    """Screen the generated command using 4-tier risk classification and detect tier escalation."""
 
     command = state.get("command", "")
     llm_risk = state.get("llm_risk")
+    retry_count = state.get("retry_count", 0)
 
     is_safe, reason, risk_level, action = screen_command_risk(command, llm_risk=llm_risk)
     _rule_tier, _rule_reason, is_allowlisted = classify_rule_tier_all_segments(command)
+
+    # Track original tier established on first attempt
+    original_tier = state.get("original_tier")
+    if original_tier is None or retry_count == 0:
+        original_tier = risk_level
+
+    # Check tier escalation on retry: if retry raised tier above original request, stop and require confirmation
+    tier_escalated = False
+    if retry_count > 0:
+        orig_rank = RISK_RANKS.get(original_tier, 1)
+        curr_rank = RISK_RANKS.get(risk_level, 1)
+        if curr_rank > orig_rank:
+            tier_escalated = True
+            if risk_level != "CRITICAL":
+                action = "REQUIRES_CONFIRMATION"
+            reason += f" (Tier escalated from {original_tier} to {risk_level} on retry; auto-run disallowed, requires confirmation)"
 
     if state.get("verbose"):
         print(f"\n[SAFETY]\nRisk   : {risk_level}\nAction : {action}\nReason : {reason}")
@@ -115,6 +147,8 @@ def safety_node(state: AgentState) -> AgentState:
         "risk_level": risk_level,
         "action": action,
         "is_allowlisted": is_allowlisted,
+        "original_tier": original_tier,
+        "tier_escalated": tier_escalated,
     }
 
 
@@ -277,13 +311,22 @@ def result_validation_node(state: AgentState) -> AgentState:
     }
 
     if not is_valid:
+        trunc_stderr = stderr.strip()
+        if len(trunc_stderr) > 300:
+            trunc_stderr = trunc_stderr[:300] + "... [truncated]"
+        trunc_stdout = stdout.strip()
+        if len(trunc_stdout) > 300:
+            trunc_stdout = trunc_stdout[:300] + "... [truncated]"
+
         updates["error_feedback"] = (
             f"Original request:\n{prompt}\n\n"
-            f"Previous command:\n{command}\n\n"
-            f"Exit code:\n{exit_code}\n\n"
-            f"STDOUT:\n{stdout.strip()}\n\n"
-            f"STDERR:\n{stderr.strip()}\n\n"
-            f"Validation failure:\n{reason}"
+            f"Failed command:\n{command}\n\n"
+            f"Exit code: {exit_code}\n\n"
+            f"STDOUT:\n{trunc_stdout}\n\n"
+            f"STDERR:\n{trunc_stderr}\n\n"
+            f"Validation problem:\n{reason}\n\n"
+            "Generate a DIFFERENT PowerShell command that directly solves the request. "
+            "Do NOT repeat the failed command."
         )
 
     return updates
@@ -333,10 +376,15 @@ def route_after_safety(state: AgentState) -> str:
 
     CRITICAL is a hard block: no override allowed.
     HIGH requires explicit typed confirmation (proceeds to human-in-the-loop interrupt).
+    Tier escalation requires explicit confirmation, never auto-run.
     MEDIUM and LOW proceed to execute (subject to confirmation/auto-run).
     """
     risk = state.get("risk_level", "LOW")
     if risk == "CRITICAL":
+        return "blocked"
+
+    # If tier escalated on retry above original request, require confirmation (never auto-run)
+    if state.get("tier_escalated", False) and not state.get("approved", False):
         return "blocked"
 
     if risk == "HIGH":
