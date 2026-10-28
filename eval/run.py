@@ -320,6 +320,7 @@ def run_single_task(
             "peak_ollama_ram_mb": peak_ram,
             "failure_type": failure_type,
             "check_reason": check_reason,
+            "template_hit": state_before_exec.get("template_hit", False),
         }
 
 
@@ -440,6 +441,13 @@ def aggregate_metrics(results: list[dict[str, Any]], model_name: str) -> dict[st
 
     overall_ci = wilson_score_interval(final_successes, total)
 
+    hits = [r for r in results if r.get("template_hit", False)]
+    non_hits = [r for r in results if not r.get("template_hit", False)]
+    template_hits = len(hits)
+    template_hit_rate = round(template_hits / total * 100, 2) if total > 0 else 0.0
+    avg_lat_hits = round(sum(r["total_time_s"] for r in hits) / len(hits), 2) if hits else 0.0
+    avg_lat_non_hits = round(sum(r["total_time_s"] for r in non_hits) / len(non_hits), 2) if non_hits else 0.0
+
     return {
         "model": model_name,
         "total_tasks": total,
@@ -448,6 +456,10 @@ def aggregate_metrics(results: list[dict[str, Any]], model_name: str) -> dict[st
         "final_success_ci_95": overall_ci,
         "risk_tier_accuracy": round(risk_correct / total * 100, 2),
         "average_retries": round(total_retries / total, 2),
+        "template_hits": template_hits,
+        "template_hit_rate": template_hit_rate,
+        "avg_latency_hits_s": avg_lat_hits,
+        "avg_latency_non_hits_s": avg_lat_non_hits,
         "avg_llm_latency_s": round(sum(llm_times) / total, 2),
         "avg_exec_latency_s": round(sum(exec_times) / total, 2),
         "avg_total_latency_s": round(sum(total_times) / total, 2),
@@ -486,6 +498,9 @@ def print_markdown_summary(metrics: dict[str, Any], hardware: dict[str, Any], mo
     md.append(f"| **Risk-Tier Accuracy** | **{metrics['risk_tier_accuracy']}%** |")
     md.append(f"| **Average Retries per Task** | **{metrics['average_retries']}** |")
     md.append(f"| **Avg Latency per Task** | **{metrics['avg_total_latency_s']}s** (LLM: {metrics['avg_llm_latency_s']}s, Exec: {metrics['avg_exec_latency_s']}s) |")
+    if "template_hit_rate" in metrics and metrics["template_hit_rate"] > 0:
+        md.append(f"| **Template Hit Rate** | **{metrics['template_hit_rate']}%** ({metrics['template_hits']}/{metrics['total_tasks']}) |")
+        md.append(f"| **Latency (Template Hits)** | **{metrics['avg_latency_hits_s']}s** (vs Non-Hits: **{metrics['avg_latency_non_hits_s']}s**) |")
     md.append(f"| **Cold-Start Latency** | **{metrics['cold_start_latency_s']}s** (Warm Avg: {metrics['avg_warm_latency_s']}s) |")
     md.append(f"| **Ollama Peak RAM** | **{metrics['peak_ollama_ram_mb']} MB** (Avg: {metrics['avg_ollama_ram_mb']} MB) |\n")
 
@@ -545,6 +560,7 @@ def main() -> None:
     parser.add_argument("--difficulty", choices=["easy", "medium", "hard"], default=None, help="Filter by difficulty")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of tasks")
     parser.add_argument("--few-shots", type=int, default=None, help="Number of few-shot examples to include (default: FEW_SHOT_COUNT env or 0)")
+    parser.add_argument("--no-templates", action="store_true", help="Disable deterministic command templates (LLM-only mode)")
     parser.add_argument("--repeat", type=int, default=1, help="Repetitions for mean/range reporting")
     parser.add_argument("--resume", action="store_true", help="Resume previous run from JSONL")
     parser.add_argument("--resume-file", type=str, default=None, help="Specific JSONL file to resume from")
@@ -553,6 +569,11 @@ def main() -> None:
     args = parser.parse_args()
 
     os.environ["OLLAMA_MODEL"] = args.model
+    if args.no_templates:
+        os.environ["ENABLE_TEMPLATES"] = "0"
+    else:
+        os.environ["ENABLE_TEMPLATES"] = "1"
+
     if args.few_shots is not None:
         os.environ["FEW_SHOT_COUNT"] = str(args.few_shots)
         import agent.llm

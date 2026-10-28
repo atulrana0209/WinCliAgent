@@ -35,3 +35,4 @@ class AgentState(TypedDict, total=False):
     retry_count: int
     error_feedback: Optional[str]
     previous_commands: list[str]
+    template_hit: bool

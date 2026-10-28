@@ -27,7 +27,20 @@ def generate_node(state: AgentState) -> AgentState:
     error_feedback = state.get("error_feedback")
     previous_commands = list(state.get("previous_commands", []))
 
-    command, explanation, llm_risk = generate_command(prompt, error_feedback=error_feedback)
+    # Fast path: deterministic templates (only on first attempt when enabled)
+    matched = None
+    import os
+    if not error_feedback and os.getenv("ENABLE_TEMPLATES", "1") == "1":
+        from .templates import match_template
+        matched = match_template(prompt)
+
+    if matched:
+        command, explanation, llm_risk = matched
+        template_hit = True
+    else:
+        command, explanation, llm_risk = generate_command(prompt, error_feedback=error_feedback)
+        template_hit = False
+
     normalized = normalize_command(command)
 
     # Prevent repeating failed commands
@@ -39,11 +52,13 @@ def generate_node(state: AgentState) -> AgentState:
         )
         command, explanation, llm_risk = generate_command(prompt, error_feedback=retry_feedback)
         normalized = normalize_command(command)
+        template_hit = False
 
     previous_commands.append(normalized)
 
     if state.get("verbose"):
-        print(f"\n[GENERATE]\nModel : Ollama (qwen2.5:3b)\nCommand: {normalized}\nLLM Risk: {llm_risk}")
+        origin = "Template" if template_hit else "Ollama (qwen2.5:3b)"
+        print(f"\n[GENERATE]\nSource : {origin}\nCommand: {normalized}\nLLM Risk: {llm_risk}")
 
     return {
         "command": normalized,
@@ -52,6 +67,7 @@ def generate_node(state: AgentState) -> AgentState:
         "executed": False,
         "semantic_valid": False,
         "previous_commands": previous_commands,
+        "template_hit": template_hit,
     }
 
 

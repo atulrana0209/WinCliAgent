@@ -1,0 +1,30 @@
+{"id": "PARA-01", "prompt": "where am i right now", "expected_template": "current_directory", "expected_command": "Get-Location"}
+{"id": "PARA-02", "prompt": "print my working directory", "expected_template": "current_directory", "expected_command": "Get-Location"}
+{"id": "PARA-03", "prompt": "check available drive space", "expected_template": "free_disk_space", "expected_command": "Get-PSDrive -PSProvider FileSystem"}
+{"id": "PARA-04", "prompt": "show free disk space", "expected_template": "free_disk_space", "expected_command": "Get-PSDrive -PSProvider FileSystem"}
+{"id": "PARA-05", "prompt": "who am i", "expected_template": "current_user", "expected_command": "whoami"}
+{"id": "PARA-06", "prompt": "what is my username", "expected_template": "current_user", "expected_command": "whoami"}
+{"id": "PARA-07", "prompt": "what is the machine name", "expected_template": "hostname", "expected_command": "hostname"}
+{"id": "PARA-08", "prompt": "get computer name", "expected_template": "hostname", "expected_command": "hostname"}
+{"id": "PARA-09", "prompt": "what time is it", "expected_template": "datetime", "expected_command": "Get-Date"}
+{"id": "PARA-10", "prompt": "what is today's date", "expected_template": "datetime", "expected_command": "Get-Date"}
+{"id": "PARA-11", "prompt": "what processes are running", "expected_template": "running_processes", "expected_command": "Get-Process"}
+{"id": "PARA-12", "prompt": "show active processes", "expected_template": "running_processes", "expected_command": "Get-Process"}
+{"id": "PARA-13", "prompt": "what is my windows version", "expected_template": "os_version", "expected_command": "Get-ComputerInfo"}
+{"id": "PARA-14", "prompt": "show operating system version", "expected_template": "os_version", "expected_command": "Get-ComputerInfo"}
+{"id": "PARA-15", "prompt": "what is my ip configuration", "expected_template": "ip_address", "expected_command": "Get-NetIPConfiguration"}
+{"id": "PARA-16", "prompt": "show files in current folder", "expected_template": "list_files", "expected_command": "Get-ChildItem"}
+{"id": "PARA-17", "prompt": "show all contents of this directory", "expected_template": "list_files", "expected_command": "Get-ChildItem"}
+{"id": "PARA-18", "prompt": "pwd", "expected_template": "current_directory", "expected_command": "Get-Location"}
+{"id": "PARA-19", "prompt": "hostname", "expected_template": "hostname", "expected_command": "hostname"}
+{"id": "PARA-20", "prompt": "show top 10 processes by memory usage", "expected_template": null, "expected_command": null}
+{"id": "PARA-21", "prompt": "list all pdf documents in this folder", "expected_template": null, "expected_command": null}
+{"id": "PARA-22", "prompt": "find files modified after yesterday", "expected_template": null, "expected_command": null}
+{"id": "PARA-23", "prompt": "check disk space on drive E:", "expected_template": null, "expected_command": null}
+{"id": "PARA-24", "prompt": "ping 8.8.8.8 4 times", "expected_template": null, "expected_command": null}
+{"id": "PARA-25", "prompt": "list all stopped Windows services", "expected_template": null, "expected_command": null}
+{"id": "PARA-26", "prompt": "delete temporary cache directory", "expected_template": null, "expected_command": null}
+{"id": "PARA-27", "prompt": "count lines in logfile.txt", "expected_template": null, "expected_command": null}
+{"id": "PARA-28", "prompt": "find any process named chrome", "expected_template": null, "expected_command": null}
+{"id": "PARA-29", "prompt": "restart the spooler service", "expected_template": null, "expected_command": null}
+{"id": "PARA-30", "prompt": "compress archive to zip file", "expected_template": null, "expected_command": null}

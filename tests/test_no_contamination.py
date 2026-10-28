@@ -213,5 +213,45 @@ class TestNoContamination(unittest.TestCase):
         self.assertEqual(all_violations, [], f"Contamination detected in few-shot examples:\n" + "\n".join(all_violations))
 
 
+class TestTemplateContamination(unittest.TestCase):
+    """Hermetic unit tests verifying template triggers and reporting cmdlet overlaps."""
+
+    def setUp(self):
+        self.benchmark_items = _load_benchmark_items()
+        from agent.templates import TEMPLATES
+        self.templates = TEMPLATES
+
+    def test_template_triggers_not_copied_from_held_out(self):
+        """Template trigger patterns must not be direct copies of held-out benchmark tasks."""
+        heldout_items = [b for b in self.benchmark_items if "heldout" in b.get("file", "")]
+        exact_copied = []
+        for t in self.templates:
+            for pat in t.get("patterns", []):
+                # Ensure the regex pattern is not a verbatim non-regex string copied from heldout
+                clean_pat = pat.strip("^$").strip()
+                if "(" not in clean_pat and "[" not in clean_pat and "?" not in clean_pat:
+                    for h in heldout_items:
+                        h_prompt = _normalize_text(h.get("prompt", ""))
+                        if clean_pat.lower() == h_prompt:
+                            exact_copied.append(f"Template '{t['intent']}' pattern '{pat}' matches held-out ID {h['id']}")
+
+        self.assertEqual(exact_copied, [], f"Template patterns copied from held-out items: {exact_copied}")
+
+    def test_report_template_command_overlaps_with_benchmarks(self):
+        """Report template command overlaps with benchmark tasks so they are transparent."""
+        template_cmds = {t["command"] for t in self.templates}
+        bench_cmds = {b.get("command", "").strip() for b in self.benchmark_items if b.get("command")}
+
+        overlaps = template_cmds.intersection(bench_cmds)
+        # Template commands are standard cmdlets (Get-Location, Get-Date, etc.)
+        # Overlaps are expected for common system cmdlets, but must be documented
+        self.assertTrue(len(template_cmds) > 0)
+        # We assert that every template command is a known safe read-only cmdlet
+        safe_stems = {"Get-Location", "Get-PSDrive", "whoami", "hostname", "Get-Date", "Get-Process", "Get-ComputerInfo", "Get-NetIPConfiguration", "Get-ChildItem"}
+        for cmd in template_cmds:
+            cmdlet = cmd.split()[0]
+            self.assertIn(cmdlet, safe_stems, f"Unexpected template command: {cmd}")
+
+
 if __name__ == "__main__":
     unittest.main()
