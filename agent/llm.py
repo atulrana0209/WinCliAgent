@@ -18,6 +18,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+FEW_SHOT_COUNT = int(os.getenv("FEW_SHOT_COUNT", "5"))
 
 
 class CommandOutput(BaseModel):
@@ -179,6 +180,20 @@ def generate_command(
         "}\n"
         "Do not include any text outside the JSON object."
     )
+
+    if FEW_SHOT_COUNT > 0:
+        try:
+            from .few_shots import FEW_SHOT_EXAMPLES
+            selected = FEW_SHOT_EXAMPLES[:FEW_SHOT_COUNT]
+            if selected:
+                system_prompt += "\n\nExamples of correct command generation:\n"
+                for ex in selected:
+                    system_prompt += (
+                        f"Request: {ex['prompt']}\n"
+                        f'{{"command": "{ex["command"]}", "explanation": "{ex["explanation"]}", "risk": "{ex["risk"]}"}}\n'
+                    )
+        except ImportError:
+            pass
 
     user_content = f"User request:\n{prompt}"
     if error_feedback:

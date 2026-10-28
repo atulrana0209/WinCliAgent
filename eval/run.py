@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import glob
 import json
 import os
 import platform
@@ -543,13 +544,19 @@ def main() -> None:
     parser.add_argument("--category", type=str, default=None, help="Filter by category")
     parser.add_argument("--difficulty", choices=["easy", "medium", "hard"], default=None, help="Filter by difficulty")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of tasks")
+    parser.add_argument("--few-shots", type=int, default=None, help="Number of few-shot examples to include (default: FEW_SHOT_COUNT env or 0)")
     parser.add_argument("--repeat", type=int, default=1, help="Repetitions for mean/range reporting")
     parser.add_argument("--resume", action="store_true", help="Resume previous run from JSONL")
+    parser.add_argument("--resume-file", type=str, default=None, help="Specific JSONL file to resume from")
     parser.add_argument("--save", type=str, default=None, help="Custom output JSON path")
     parser.add_argument("--blind", action="store_true", help="Blind execution: suppress per-task output to prevent test inspection")
     args = parser.parse_args()
 
     os.environ["OLLAMA_MODEL"] = args.model
+    if args.few_shots is not None:
+        os.environ["FEW_SHOT_COUNT"] = str(args.few_shots)
+        import agent.llm
+        agent.llm.FEW_SHOT_COUNT = args.few_shots
 
     hardware_info = get_system_hardware_info()
     tasks = load_tasks(
@@ -563,7 +570,18 @@ def main() -> None:
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    jsonl_file = os.path.join(RESULTS_DIR, f"{clean_model_name}_{timestamp}.jsonl")
+    if args.resume_file:
+        jsonl_file = args.resume_file
+        args.resume = True
+    elif args.resume:
+        existing = glob.glob(os.path.join(RESULTS_DIR, f"{clean_model_name}_*.jsonl"))
+        if existing:
+            existing.sort(key=os.path.getmtime, reverse=True)
+            jsonl_file = existing[0]
+        else:
+            jsonl_file = os.path.join(RESULTS_DIR, f"{clean_model_name}_{timestamp}.jsonl")
+    else:
+        jsonl_file = os.path.join(RESULTS_DIR, f"{clean_model_name}_{timestamp}.jsonl")
     json_summary_file = args.save or os.path.join(RESULTS_DIR, f"{clean_model_name}_baseline.json")
     md_summary_file = os.path.join(RESULTS_DIR, f"{clean_model_name}_baseline.md")
 
